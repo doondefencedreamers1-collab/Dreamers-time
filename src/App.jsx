@@ -1,3 +1,4 @@
+import { supabase } from './supabase';
 import React, { useState, useEffect } from 'react';
 import { Activity, Users, AlertTriangle, Search, Calendar, BookOpen, TrendingUp, Bell, ChevronRight, ArrowRight, Layers, Radio, Coffee, Phone, Upload, FileSpreadsheet, LogOut, Lock, ShieldCheck, Home, ClipboardList, CalendarOff, UserCheck, ArrowLeft, Send, CheckCircle2, XCircle, AlertCircle, BookMarked, Target, MapPin } from 'lucide-react';
 
@@ -3336,37 +3337,26 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
 // ============ MAIN ============
 export default function App() {
   const [role, setRole] = useState(null);
-  const [photos, setPhotos] = useState({}); // {teacherId: dataURL}
-  const [notifications, setNotifications] = useState([]); // {id, timestamp, read, type, ...data}
-  const [conflicts, setConflicts] = useState(CONFLICTS); // persists across view switches
-  const [cells, setCells] = useState(INITIAL_CELLS); // App-level timetable cells (linked to conflicts)
-  const [teachers, setTeachers] = useState(TEACHERS); // editable faculty list
-  const [classrooms, setClassrooms] = useState(INITIAL_CLASSROOMS); // editable classrooms with capacity
-  const [batches, setBatches] = useState(INITIAL_BATCHES); // editable batches with strength
-  const [currentTime, setCurrentTime] = useState(getISTTime()); // LIVE IST time, ticks every 15s
+  const [photos, setPhotos] = useState({});
+  const [notifications, setNotifications] = useState([]);
+  const [conflicts, setConflicts] = useState(CONFLICTS);
+  const [cells, setCells] = useState(INITIAL_CELLS);
+  const [teachers, setTeachers] = useState(TEACHERS);
+  const [classrooms, setClassrooms] = useState(INITIAL_CLASSROOMS);
+  const [batches, setBatches] = useState(INITIAL_BATCHES);
+  const [currentTime, setCurrentTime] = useState(getISTTime());
+  const [dbLoaded, setDbLoaded] = useState(false);
 
-  // IST clock tick — updates every 15 seconds for live class detection
   useEffect(() => {
-    const tick = () => setCurrentTime(getISTTime());
-    tick();
-    const interval = setInterval(tick, 15000);
-    return () => clearInterval(interval);
-  }, []);
+    const load = async () => {
+      try {
+        const [{ data: t }, { data: c }, { data: r }, { data: b }] = await Promise.all([
+          supabase.from('teachers').select('*').order('id'),
+          supabase.from('timetable_cells').select('*'),
+          supabase.from('classrooms').select('*').order('id'),
+          supabase.from('batches').select('*').order('id'),
+        ]);
 
-  const addNotification = (data) => {
-    const newNotif = {
-      id: Date.now() + Math.random(),
-      timestamp: new Date(),
-      read: false,
-      ...data,
-    };
-    setNotifications(prev => [newNotif, ...prev].slice(0, 50)); // keep last 50
-  };
-
-  const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  const clearNotifications = () => setNotifications([]);
-
-  if (!role) return <LoginScreen onLogin={setRole} />;
-  if (role === 'teacher') return <TeacherPortal onLogout={() => setRole(null)} photos={photos} setPhotos={setPhotos} notifications={notifications} markAllRead={markAllRead} cells={cells} currentTime={currentTime} />;
-  return <DirectorPortal onLogout={() => setRole(null)} role={role} photos={photos} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={cells} setCells={setCells} teachers={teachers} setTeachers={setTeachers} classrooms={classrooms} setClassrooms={setClassrooms} batches={batches} setBatches={setBatches} currentTime={currentTime} />;
-}
+        if (!t?.length) {
+          await supabase.from('teachers').insert(
+            TEACHERS.map(t => ({ id: t.id, name: t.name, subjects: t.subjects, wing: t.wing, slots: t.slots, hours: t.hours, status: t.status,
