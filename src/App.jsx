@@ -3336,7 +3336,7 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
 
 // ============ MAIN ============
 export default function App() {
-  const [role, setRole] = useState(null);
+  const [role, setRole] = useState(() => localStorage.getItem('dreamer_role') || null);
   const [photos, setPhotos] = useState({});
   const [notifications, setNotifications] = useState([]);
   const [conflicts, setConflicts] = useState(CONFLICTS);
@@ -3356,7 +3356,94 @@ export default function App() {
           supabase.from('classrooms').select('*').order('id'),
           supabase.from('batches').select('*').order('id'),
         ]);
-
         if (!t?.length) {
-          await supabase.from('teachers').insert(
-            TEACHERS.map(t => ({ id: t.id, name: t.name, subjects: t.subjects, wing: t.wing, slots: t.slots, hours: t.hours, status: t.status,
+          await supabase.from('teachers').insert(TEACHERS.map(t => ({ id: t.id, name: t.name, subjects: t.subjects, wing: t.wing, slots: t.slots, hours: t.hours, status: t.status, phone: t.phone })));
+          setTeachers(TEACHERS);
+        } else { setTeachers(t); }
+        if (!c?.length) {
+          const rows = Object.entries(INITIAL_CELLS).map(([key, val]) => ({ cell_key: key, subj: val.subj, tch: val.tch, room: val.room || null }));
+          await supabase.from('timetable_cells').insert(rows);
+          setCells(INITIAL_CELLS);
+        } else {
+          const obj = {};
+          c.forEach(row => { obj[row.cell_key] = { subj: row.subj, tch: row.tch, room: row.room }; });
+          setCells(obj);
+        }
+        if (!r?.length) {
+          await supabase.from('classrooms').insert(INITIAL_CLASSROOMS.map(r => ({ id: r.id, name: r.name, wing: r.wing, capacity: r.capacity, floor: r.floor })));
+          setClassrooms(INITIAL_CLASSROOMS);
+        } else { setClassrooms(r); }
+        if (!b?.length) {
+          await supabase.from('batches').insert(INITIAL_BATCHES.map(b => ({ id: b.id, name: b.name, wing: b.wing, strength: b.strength, class_teacher: b.classTeacher || null })));
+          setBatches(INITIAL_BATCHES);
+        } else { setBatches(b.map(b => ({ ...b, classTeacher: b.class_teacher }))); }
+      } catch (e) { console.error('DB load error:', e); }
+      setDbLoaded(true);
+    };
+    load();
+  }, []);
+
+  useEffect(() => {
+    const tick = () => setCurrentTime(getISTTime());
+    tick();
+    const interval = setInterval(tick, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleLogin = (r) => { setRole(r); localStorage.setItem('dreamer_role', r); };
+  const handleLogout = () => { setRole(null); localStorage.removeItem('dreamer_role'); };
+
+  const syncCells = async (newCells) => {
+    setCells(newCells);
+    try {
+      await supabase.from('timetable_cells').delete().neq('cell_key', '__never__');
+      const rows = Object.entries(newCells).map(([key, val]) => ({ cell_key: key, subj: val.subj, tch: val.tch, room: val.room || null }));
+      if (rows.length) await supabase.from('timetable_cells').insert(rows);
+    } catch (e) { console.error('Cells sync:', e); }
+  };
+
+  const syncTeachers = async (newTeachers) => {
+    setTeachers(newTeachers);
+    try {
+      await supabase.from('teachers').delete().neq('id', -9999);
+      if (newTeachers.length) await supabase.from('teachers').insert(newTeachers.map(t => ({ id: t.id, name: t.name, subjects: t.subjects, wing: t.wing, slots: t.slots, hours: t.hours, status: t.status, phone: t.phone })));
+    } catch (e) { console.error('Teachers sync:', e); }
+  };
+
+  const syncClassrooms = async (newClassrooms) => {
+    setClassrooms(newClassrooms);
+    try {
+      await supabase.from('classrooms').delete().neq('id', -9999);
+      if (newClassrooms.length) await supabase.from('classrooms').insert(newClassrooms.map(r => ({ id: r.id, name: r.name, wing: r.wing, capacity: r.capacity, floor: r.floor })));
+    } catch (e) { console.error('Classrooms sync:', e); }
+  };
+
+  const syncBatches = async (newBatches) => {
+    setBatches(newBatches);
+    try {
+      await supabase.from('batches').delete().neq('id', -9999);
+      if (newBatches.length) await supabase.from('batches').insert(newBatches.map(b => ({ id: b.id, name: b.name, wing: b.wing, strength: b.strength, class_teacher: b.classTeacher || null })));
+    } catch (e) { console.error('Batches sync:', e); }
+  };
+
+  const addNotification = (data) => {
+    const newNotif = { id: Date.now() + Math.random(), timestamp: new Date(), read: false, ...data };
+    setNotifications(prev => [newNotif, ...prev].slice(0, 50));
+  };
+  const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  const clearNotifications = () => setNotifications([]);
+
+  if (!dbLoaded) return (
+    <div className="min-h-screen bg-stone-950 flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-8 h-8 border-2 border-stone-700 border-t-amber-400 rounded-full animate-spin mx-auto mb-4" />
+        <div className="text-stone-400 text-sm font-mono uppercase tracking-wider">Loading data...</div>
+        <div className="text-stone-600 text-xs font-mono mt-1">Connecting to database</div>
+      </div>
+    </div>
+  );
+
+  if (!role) return <LoginScreen onLogin={handleLogin} />;
+  if (role === 'teacher') return <TeacherPortal onLogout={handleLogout} photos={photos} setPhotos={setPhotos} notifications={notifications} markAllRead={markAllRead} cells={cells} currentTime={currentTime} />;
+  return <DirectorPortal onLogout={handleLogout} role={role} photos={photos} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={cells} setCells={syncCells} teachers={teachers} setTeachers={syncTeachers} classrooms={classrooms} setClassrooms={syncClassrooms} batches={batches} setBatches={syncBatches} currentTime={currentTime} />;
+}
