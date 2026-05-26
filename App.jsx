@@ -1,8 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Users, AlertTriangle, Search, Calendar, BookOpen, TrendingUp, Bell, ChevronRight, ArrowRight, Layers, Radio, Coffee, Phone, Upload, FileSpreadsheet, LogOut, Lock, ShieldCheck, Home, ClipboardList, CalendarOff, UserCheck, ArrowLeft, Send, CheckCircle2, XCircle, AlertCircle, BookMarked, Target, MapPin } from 'lucide-react';
+import { Activity, Users, AlertTriangle, Search, Calendar, BookOpen, TrendingUp, Bell, ChevronRight, ArrowRight, Layers, Radio, Coffee, Phone, Upload, FileSpreadsheet, LogOut, Lock, ShieldCheck, Home, ClipboardList, CalendarOff, UserCheck, ArrowLeft, Send, CheckCircle2, XCircle, AlertCircle, BookMarked, Target, MapPin, Pencil } from 'lucide-react';
 
 // ============ DATA ============
 // IST Time Helpers — uses Asia/Kolkata timezone for live class detection
+
+// SYSTEM USERS — Director and Manager phones (Teachers from TEACHERS array)
+// IMPORTANT: To change these phones, edit them here. In Phase 2 (Supabase), these will move to database.
+const SYSTEM_USERS = {
+  director: [
+    { phone: '+91 98765 00001', name: 'Director', role: 'director' },
+  ],
+  manager: [
+    { phone: '+91 98765 00002', name: 'Schedule Manager', role: 'manager' },
+  ],
+};
+
+// Demo OTP — any phone gets this OTP. In Phase 2 with Supabase, real SMS-based OTP.
+const DEMO_OTP = '1234';
+
+// Normalize phone for comparison — strips spaces, dashes, country code variations
+const normalizePhone = (phone) => {
+  if (!phone) return '';
+  return phone.replace(/\D/g, '').slice(-10); // last 10 digits only
+};
+
+// Find user by phone + role
+const findUserByPhone = (role, phone, teachers) => {
+  const normalized = normalizePhone(phone);
+  if (!normalized || normalized.length !== 10) return null;
+  if (role === 'teacher') {
+    return teachers.find(t => normalizePhone(t.phone) === normalized);
+  }
+  return SYSTEM_USERS[role]?.find(u => normalizePhone(u.phone) === normalized);
+};
+
 const getISTTime = () => {
   return new Date().toLocaleTimeString('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -329,11 +360,49 @@ const SectionHeader = ({ kicker, title, action }) => (
 );
 
 // ============ LOGIN ============
-const LoginScreen = ({ onLogin }) => {
+const LoginScreen = ({ onLogin, teachers = TEACHERS }) => {
   const [step, setStep] = useState('role');
   const [role, setRole] = useState(null);
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
+  const [matchedUser, setMatchedUser] = useState(null); // user object found by phone
+  const [phoneError, setPhoneError] = useState(''); // error message if phone not registered
+  const [otpError, setOtpError] = useState(''); // error if OTP wrong
+
+  // Validate phone against registered users for the selected role
+  const handleSendOTP = () => {
+    setPhoneError('');
+    setOtpError('');
+    if (phone.length < 10) {
+      setPhoneError('Please enter a valid 10-digit mobile number');
+      return;
+    }
+    const user = findUserByPhone(role, phone, teachers);
+    if (!user) {
+      const msg = role === 'teacher'
+        ? 'Yeh number faculty database mein registered nahi hai. Director/Manager se contact karo.'
+        : `Yeh number ${role === 'director' ? 'Director' : 'Manager'} ke roop mein registered nahi hai.`;
+      setPhoneError(msg);
+      return;
+    }
+    setMatchedUser(user);
+    setOtp('');
+    setStep('otp');
+  };
+
+  // Verify OTP and login
+  const handleVerifyOTP = () => {
+    setOtpError('');
+    if (otp.length !== 4) {
+      setOtpError('Please enter all 4 digits');
+      return;
+    }
+    if (otp !== DEMO_OTP) {
+      setOtpError(`Galat OTP. Demo OTP: ${DEMO_OTP}`);
+      return;
+    }
+    onLogin(role, matchedUser);
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 md:p-6 relative overflow-hidden" style={{background: 'radial-gradient(ellipse at center, #0a1f15 0%, #050d09 70%, #000 100%)'}}>
@@ -529,55 +598,80 @@ const LoginScreen = ({ onLogin }) => {
 
           {step === 'phone' && (
             <>
-              <button onClick={() => setStep('role')} className="text-stone-500 hover:text-stone-300 text-[10px] uppercase tracking-wider font-mono mb-4 flex items-center gap-1">
+              <button onClick={() => { setStep('role'); setPhoneError(''); setPhone(''); }} className="text-stone-500 hover:text-stone-300 text-[10px] uppercase tracking-wider font-mono mb-4 flex items-center gap-1">
                 <ArrowLeft className="w-3 h-3" /> Back
               </button>
               <div className="text-[10px] uppercase tracking-[0.25em] text-stone-500 font-mono mb-1">Step 02 · {role === 'director' ? 'Director' : role === 'manager' ? 'Schedule Manager' : 'Teacher'} Login</div>
               <h2 className="text-2xl text-stone-100 font-light mb-1" style={{fontFamily: 'Fraunces, serif'}}>Enter your <span className="italic text-emerald-300">mobile</span></h2>
-              <p className="text-stone-500 text-xs mb-6">We'll send a 4-digit OTP via SMS &amp; WhatsApp.</p>
+              <p className="text-stone-500 text-xs mb-6">Sirf registered number se login ho payega.</p>
 
-              <div className="border border-stone-800 bg-stone-950 p-4 flex items-center gap-3 mb-4 focus-within:border-emerald-600/40 transition-colors">
+              <div className={`border bg-stone-950 p-4 flex items-center gap-3 mb-2 transition-colors ${phoneError ? 'border-red-700/60' : 'border-stone-800 focus-within:border-emerald-600/40'}`}>
                 <Phone className="w-4 h-4 text-stone-500" />
                 <span className="text-stone-400 font-mono text-sm">+91</span>
-                <input type="tel" maxLength={10} value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g,''))} placeholder="98765 43210" className="flex-1 bg-transparent text-stone-100 font-mono text-sm focus:outline-none placeholder-stone-700 w-full" />
+                <input type="tel" maxLength={10} value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g,'')); setPhoneError(''); }} placeholder="98765 43210" className="flex-1 bg-transparent text-stone-100 font-mono text-sm focus:outline-none placeholder-stone-700 w-full" onKeyDown={e => e.key === 'Enter' && handleSendOTP()} autoFocus />
               </div>
 
-              <button onClick={() => phone.length >= 10 && setStep('otp')} disabled={phone.length < 10} className={`w-full p-3 text-xs uppercase tracking-wider font-mono border transition-all ${phone.length >= 10 ? 'border-emerald-600/50 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'border-stone-800 text-stone-700 cursor-not-allowed'}`}>
+              {phoneError && (
+                <div className="border border-red-700/40 bg-red-500/10 p-3 mb-3 flex items-start gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
+                  <div className="text-[11px] text-red-200 leading-relaxed">{phoneError}</div>
+                </div>
+              )}
+
+              <button onClick={handleSendOTP} disabled={phone.length < 10} className={`w-full p-3 text-xs uppercase tracking-wider font-mono border transition-all ${phone.length >= 10 ? 'border-emerald-600/50 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'border-stone-800 text-stone-700 cursor-not-allowed'}`}>
                 Send OTP →
               </button>
 
-              <div className="mt-5 text-[10px] text-stone-600 font-mono text-center">
-                {role === 'teacher' ? 'Number must be in faculty database' : 'Pre-registered admin/manager number required'}
+              <div className="mt-5 text-[10px] text-stone-600 font-mono text-center leading-relaxed">
+                {role === 'teacher'
+                  ? 'Number faculty database mein hona chahiye'
+                  : role === 'director'
+                    ? `Demo Director number: ${SYSTEM_USERS.director[0].phone}`
+                    : `Demo Manager number: ${SYSTEM_USERS.manager[0].phone}`}
               </div>
             </>
           )}
 
           {step === 'otp' && (
             <>
-              <button onClick={() => setStep('phone')} className="text-stone-500 hover:text-stone-300 text-[10px] uppercase tracking-wider font-mono mb-4 flex items-center gap-1">
+              <button onClick={() => { setStep('phone'); setOtp(''); setOtpError(''); }} className="text-stone-500 hover:text-stone-300 text-[10px] uppercase tracking-wider font-mono mb-4 flex items-center gap-1">
                 <ArrowLeft className="w-3 h-3" /> Change number
               </button>
               <div className="text-[10px] uppercase tracking-[0.25em] text-stone-500 font-mono mb-1">Verify OTP</div>
               <h2 className="text-2xl text-stone-100 font-light mb-1" style={{fontFamily: 'Fraunces, serif'}}>Enter the <span className="italic text-emerald-300">4-digit code</span></h2>
-              <p className="text-stone-500 text-xs mb-6">Sent to +91 {phone}. <span className="text-emerald-400 cursor-pointer hover:underline">Resend in 28s</span></p>
+              <p className="text-stone-500 text-xs mb-3">Sent to +91 {phone}. Welcome, <span className="text-emerald-300">{matchedUser?.name}</span></p>
 
-              <div className="flex gap-2 justify-center mb-6">
+              {/* DEMO OTP HINT — clearly shows it's demo mode */}
+              <div className="border border-amber-700/40 bg-amber-500/5 p-3 mb-5 flex items-center gap-2">
+                <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <div className="text-[11px] text-amber-200">
+                  <span className="font-mono text-amber-300">Demo OTP: {DEMO_OTP}</span> <span className="text-amber-200/70">· Real SMS Phase 2 mein</span>
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-center mb-3">
                 {[0,1,2,3].map(i => (
                   <input key={i} maxLength={1} value={otp[i] || ''} onChange={e => {
                     const v = e.target.value.replace(/\D/g,'');
                     const newOtp = otp.split('');
                     newOtp[i] = v;
                     setOtp(newOtp.join(''));
+                    setOtpError('');
                     if (v && i < 3) e.target.nextElementSibling?.focus();
-                  }} className="w-12 h-12 md:w-14 md:h-14 border border-stone-800 bg-stone-950 text-stone-100 text-center text-2xl font-light focus:border-emerald-600/60 focus:outline-none" style={{fontFamily: 'Fraunces, serif'}} />
+                  }} onKeyDown={e => e.key === 'Enter' && handleVerifyOTP()} className={`w-12 h-12 md:w-14 md:h-14 border bg-stone-950 text-stone-100 text-center text-2xl font-light focus:outline-none ${otpError ? 'border-red-700/60' : 'border-stone-800 focus:border-emerald-600/60'}`} style={{fontFamily: 'Fraunces, serif'}} autoFocus={i === 0} />
                 ))}
               </div>
 
-              <button onClick={() => otp.length === 4 && onLogin(role)} disabled={otp.length !== 4} className={`w-full p-3 text-xs uppercase tracking-wider font-mono border transition-all ${otp.length === 4 ? 'border-emerald-600/50 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'border-stone-800 text-stone-700 cursor-not-allowed'}`}>
+              {otpError && (
+                <div className="border border-red-700/40 bg-red-500/10 p-3 mb-4 flex items-start gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
+                  <div className="text-[11px] text-red-200">{otpError}</div>
+                </div>
+              )}
+
+              <button onClick={handleVerifyOTP} disabled={otp.length !== 4} className={`w-full p-3 text-xs uppercase tracking-wider font-mono border transition-all ${otp.length === 4 ? 'border-emerald-600/50 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'border-stone-800 text-stone-700 cursor-not-allowed'}`}>
                 Verify &amp; Enter →
               </button>
-
-              <div className="mt-4 text-[10px] text-stone-600 font-mono text-center">Demo: any 4 digits will work</div>
             </>
           )}
           </div>
@@ -870,6 +964,10 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
   const [newTeacher, setNewTeacher] = useState({ name: '', subject: '', wing: 'Senior', phone: '+91 ' });
   const [newRoom, setNewRoom] = useState({ name: '', wing: 'Senior', capacity: 60, floor: 'Ground' });
   const [newBatch, setNewBatch] = useState({ name: '', wing: 'Senior', strength: 30, classTeacher: '' });
+  // EDIT STATE — one editing object per entity type
+  const [editTeacher, setEditTeacher] = useState(null); // editing teacher object (full)
+  const [editRoom, setEditRoom] = useState(null); // editing room object
+  const [editBatch, setEditBatch] = useState(null); // editing batch object
   const [toast, setToast] = useState(null);
 
   // LIVE workload computed from cells (slots/hours derived, not static)
@@ -965,6 +1063,58 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
     showToast(`✗ Batch ${batch.name} removed${orphanCount > 0 ? ` (${orphanCount} cells orphaned)` : ''}`);
   };
 
+  // ============ EDIT HANDLERS ============
+  // EDIT TEACHER: save changes back to teachers list
+  const saveEditTeacher = () => {
+    if (!editTeacher.name?.trim()) { alert('Teacher name is required'); return; }
+    if (!editTeacher.subjects?.[0]?.trim()) { alert('Subject is required'); return; }
+    setTeachers(teachers.map(t => t.id === editTeacher.id ? {
+      ...t,
+      name: editTeacher.name.trim(),
+      subjects: [editTeacher.subjects[0].trim()],
+      wing: editTeacher.wing,
+      phone: editTeacher.phone?.trim() || t.phone,
+    } : t));
+    showToast(`✓ ${editTeacher.name} updated`);
+    setEditTeacher(null);
+    setContactTeacher(null);
+  };
+
+  // EDIT ROOM: save changes back to classrooms list
+  const saveEditRoom = () => {
+    if (!editRoom.name?.trim()) { alert('Room name is required'); return; }
+    if (editRoom.capacity < 1) { alert('Capacity must be at least 1'); return; }
+    const oldName = classrooms.find(r => r.id === editRoom.id)?.name;
+    const newName = editRoom.name.toUpperCase().trim();
+    setClassrooms(classrooms.map(r => r.id === editRoom.id ? {
+      ...r,
+      name: newName,
+      wing: editRoom.wing,
+      capacity: parseInt(editRoom.capacity),
+      floor: editRoom.floor?.trim() || '—',
+    } : r));
+    // Note: existing cells using old room name still reference oldName; that's a phase-2 cascade concern
+    showToast(`✓ Room ${newName} updated${oldName !== newName ? ` (renamed from ${oldName})` : ''}`);
+    setEditRoom(null);
+  };
+
+  // EDIT BATCH: save changes back to batches list
+  const saveEditBatch = () => {
+    if (!editBatch.name?.trim()) { alert('Batch name is required'); return; }
+    if (editBatch.strength < 1) { alert('Strength must be at least 1'); return; }
+    const oldName = batches.find(b => b.id === editBatch.id)?.name;
+    const newName = editBatch.name.trim();
+    setBatches(batches.map(b => b.id === editBatch.id ? {
+      ...b,
+      name: newName,
+      wing: editBatch.wing,
+      strength: parseInt(editBatch.strength),
+      classTeacher: editBatch.classTeacher?.trim() || null,
+    } : b));
+    showToast(`✓ Batch ${newName} updated${oldName !== newName ? ` (renamed from ${oldName})` : ''}`);
+    setEditBatch(null);
+  };
+
   // Counts
   const seniorCount = teachers.filter(t => t.wing === 'Senior' || t.wing === 'Both').length;
   const juniorCount = teachers.filter(t => t.wing === 'Junior' || t.wing === 'Both').length;
@@ -1032,6 +1182,9 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
               {t.status === 'oncall' && <div className="absolute top-3 right-3"><Pill variant="info">On-Call</Pill></div>}
               <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                 {t.status === 'active' && <Phone className="w-3.5 h-3.5 text-amber-400" strokeWidth={2} />}
+                <button onClick={(e) => { e.stopPropagation(); setEditTeacher({...t, subjects: [...(t.subjects || [''])]}); }} className="text-sky-400 hover:text-sky-300 p-0.5" title="Edit teacher">
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
                 <button onClick={(e) => { e.stopPropagation(); deleteTeacher(t); }} className="text-red-400 hover:text-red-300 p-0.5" title="Delete teacher">
                   <XCircle className="w-3.5 h-3.5" />
                 </button>
@@ -1086,9 +1239,14 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
             const cls = wingColors[r.wing] || 'border-stone-700 text-stone-300';
             return (
               <div key={r.id} className={`border ${cls.split(' ')[0]} bg-stone-950/40 hover:bg-stone-900/60 p-5 transition-all relative group`}>
-                <button onClick={() => deleteRoom(r)} className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-300" title="Delete classroom">
-                  <XCircle className="w-4 h-4" />
-                </button>
+                <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                  <button onClick={() => setEditRoom({...r})} className="text-sky-400 hover:text-sky-300" title="Edit classroom">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => deleteRoom(r)} className="text-red-400 hover:text-red-300" title="Delete classroom">
+                    <XCircle className="w-4 h-4" />
+                  </button>
+                </div>
                 <div className="flex items-start gap-3 mb-4">
                   <div className={`w-10 h-10 border ${cls.split(' ')[0]} bg-stone-900 flex items-center justify-center shrink-0`}>
                     <MapPin className={`w-4 h-4 ${cls.split(' ')[1]}`} strokeWidth={2} />
@@ -1130,9 +1288,14 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
             const classTeacherFull = teachers.find(t => t.name.split(' ')[0] === b.classTeacher)?.name || (b.classTeacher ? `${b.classTeacher} Sir` : 'Unassigned');
             return (
               <div key={b.id} className={`border ${cls.split(' ')[0]} bg-stone-950/40 hover:bg-stone-900/60 p-5 transition-all relative group`}>
-                <button onClick={() => deleteBatch(b)} className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-300" title="Delete batch">
-                  <XCircle className="w-4 h-4" />
-                </button>
+                <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                  <button onClick={() => setEditBatch({...b})} className="text-sky-400 hover:text-sky-300" title="Edit batch">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => deleteBatch(b)} className="text-red-400 hover:text-red-300" title="Delete batch">
+                    <XCircle className="w-4 h-4" />
+                  </button>
+                </div>
                 <div className="flex items-start gap-3 mb-4">
                   <div className={`w-10 h-10 border ${cls.split(' ')[0]} bg-stone-900 flex items-center justify-center shrink-0`}>
                     <Layers className={`w-4 h-4 ${cls.split(' ')[1]}`} strokeWidth={2} />
@@ -1311,6 +1474,153 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
         </div>
       )}
 
+      {/* EDIT TEACHER MODAL */}
+      {editTeacher && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur z-50 flex items-center justify-center p-4" onClick={() => setEditTeacher(null)}>
+          <div className="w-full max-w-md bg-stone-950 border border-sky-700/40 p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.25em] text-sky-400/70 font-mono">Edit Faculty</div>
+                <h3 className="text-xl text-stone-100 font-light mt-1" style={{fontFamily: 'Fraunces, serif'}}>Update teacher details</h3>
+                <div className="text-stone-500 text-[11px] mt-1">Editing: <span className="text-sky-300">{teachers.find(t => t.id === editTeacher.id)?.name}</span></div>
+              </div>
+              <button onClick={() => setEditTeacher(null)} className="text-stone-500 hover:text-stone-300 shrink-0">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Full Name</div>
+              <input value={editTeacher.name || ''} onChange={e => setEditTeacher({...editTeacher, name: e.target.value})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-sm focus:border-sky-600/40 focus:outline-none" autoFocus />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Primary Subject</div>
+              <input value={editTeacher.subjects?.[0] || ''} onChange={e => setEditTeacher({...editTeacher, subjects: [e.target.value]})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-sm focus:border-sky-600/40 focus:outline-none" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Wing</div>
+              <div className="grid grid-cols-3 gap-2">
+                {['Senior', 'Junior', 'Both'].map(w => (
+                  <button key={w} onClick={() => setEditTeacher({...editTeacher, wing: w})} className={`px-3 py-2 text-xs border transition-colors ${editTeacher.wing === w ? 'border-sky-600/50 bg-sky-500/10 text-sky-300' : 'border-stone-800 text-stone-400 hover:border-stone-700'}`}>{w}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Mobile Number</div>
+              <input value={editTeacher.phone || ''} onChange={e => setEditTeacher({...editTeacher, phone: e.target.value})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-sm font-mono focus:border-sky-600/40 focus:outline-none" />
+              <div className="text-[10px] text-stone-500 mt-1 italic">Yeh number teacher login ke liye use hota hai</div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button onClick={() => setEditTeacher(null)} className="px-3 py-2 text-[10px] uppercase tracking-wider font-mono border border-stone-700 text-stone-400">Cancel</button>
+              <button onClick={saveEditTeacher} className="ml-auto px-4 py-2 text-[10px] uppercase tracking-wider font-mono border border-sky-600/50 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 flex items-center gap-2">
+                <CheckCircle2 className="w-3 h-3" /> Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT CLASSROOM MODAL */}
+      {editRoom && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur z-50 flex items-center justify-center p-4" onClick={() => setEditRoom(null)}>
+          <div className="w-full max-w-md bg-stone-950 border border-sky-700/40 p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.25em] text-sky-400/70 font-mono">Edit Classroom</div>
+                <h3 className="text-xl text-stone-100 font-light mt-1" style={{fontFamily: 'Fraunces, serif'}}>Update room details</h3>
+                <div className="text-stone-500 text-[11px] mt-1">Editing: <span className="text-sky-300">{classrooms.find(r => r.id === editRoom.id)?.name}</span></div>
+              </div>
+              <button onClick={() => setEditRoom(null)} className="text-stone-500 hover:text-stone-300 shrink-0">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Room Name / Code</div>
+              <input value={editRoom.name || ''} onChange={e => setEditRoom({...editRoom, name: e.target.value.toUpperCase()})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-sm font-mono focus:border-sky-600/40 focus:outline-none" autoFocus />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Wing / Type</div>
+              <div className="grid grid-cols-5 gap-1.5">
+                {['Senior', 'Junior', 'Lab', 'Online', 'Outdoor'].map(w => (
+                  <button key={w} onClick={() => setEditRoom({...editRoom, wing: w})} className={`px-2 py-2 text-[10px] border transition-colors ${editRoom.wing === w ? 'border-sky-600/50 bg-sky-500/10 text-sky-300' : 'border-stone-800 text-stone-400 hover:border-stone-700'}`}>{w}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5 flex items-center gap-2">
+                <Users className="w-3 h-3" /> Student Capacity
+              </div>
+              <input type="number" min="1" max="500" value={editRoom.capacity || ''} onChange={e => setEditRoom({...editRoom, capacity: e.target.value})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-lg font-mono focus:border-sky-600/40 focus:outline-none" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Floor</div>
+              <div className="grid grid-cols-4 gap-2">
+                {['Ground', '1st', '2nd', '3rd'].map(f => (
+                  <button key={f} onClick={() => setEditRoom({...editRoom, floor: f})} className={`px-2 py-2 text-xs border transition-colors ${editRoom.floor === f ? 'border-sky-600/50 bg-sky-500/10 text-sky-300' : 'border-stone-800 text-stone-400 hover:border-stone-700'}`}>{f}</button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button onClick={() => setEditRoom(null)} className="px-3 py-2 text-[10px] uppercase tracking-wider font-mono border border-stone-700 text-stone-400">Cancel</button>
+              <button onClick={saveEditRoom} className="ml-auto px-4 py-2 text-[10px] uppercase tracking-wider font-mono border border-sky-600/50 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 flex items-center gap-2">
+                <CheckCircle2 className="w-3 h-3" /> Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT BATCH MODAL */}
+      {editBatch && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur z-50 flex items-center justify-center p-4" onClick={() => setEditBatch(null)}>
+          <div className="w-full max-w-md bg-stone-950 border border-sky-700/40 p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.25em] text-sky-400/70 font-mono">Edit Batch</div>
+                <h3 className="text-xl text-stone-100 font-light mt-1" style={{fontFamily: 'Fraunces, serif'}}>Update batch details</h3>
+                <div className="text-stone-500 text-[11px] mt-1">Editing: <span className="text-sky-300">{batches.find(b => b.id === editBatch.id)?.name}</span></div>
+              </div>
+              <button onClick={() => setEditBatch(null)} className="text-stone-500 hover:text-stone-300 shrink-0">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Batch Name</div>
+              <input value={editBatch.name || ''} onChange={e => setEditBatch({...editBatch, name: e.target.value})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-sm focus:border-sky-600/40 focus:outline-none" autoFocus />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Wing</div>
+              <div className="grid grid-cols-2 gap-2">
+                {['Senior', 'Junior'].map(w => (
+                  <button key={w} onClick={() => setEditBatch({...editBatch, wing: w})} className={`px-3 py-2 text-xs border transition-colors ${editBatch.wing === w ? 'border-sky-600/50 bg-sky-500/10 text-sky-300' : 'border-stone-800 text-stone-400 hover:border-stone-700'}`}>{w}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5 flex items-center gap-2">
+                <Users className="w-3 h-3" /> Student Strength
+              </div>
+              <input type="number" min="1" max="500" value={editBatch.strength || ''} onChange={e => setEditBatch({...editBatch, strength: e.target.value})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-lg font-mono focus:border-sky-600/40 focus:outline-none" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mb-1.5">Class Teacher</div>
+              <select value={editBatch.classTeacher || ''} onChange={e => setEditBatch({...editBatch, classTeacher: e.target.value})} className="w-full bg-stone-900 border border-stone-800 px-3 py-2.5 text-stone-200 text-sm focus:border-sky-600/40 focus:outline-none">
+                <option value="">— No class teacher —</option>
+                {teachers.map(t => {
+                  const first = t.name.split(' ')[0];
+                  return <option key={t.id} value={first}>{t.name} ({t.subjects?.[0] || '—'})</option>;
+                })}
+              </select>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button onClick={() => setEditBatch(null)} className="px-3 py-2 text-[10px] uppercase tracking-wider font-mono border border-stone-700 text-stone-400">Cancel</button>
+              <button onClick={saveEditBatch} className="ml-auto px-4 py-2 text-[10px] uppercase tracking-wider font-mono border border-sky-600/50 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 flex items-center gap-2">
+                <CheckCircle2 className="w-3 h-3" /> Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CONTACT MODAL */}
       {contactTeacher && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur z-50 flex items-center justify-center p-4" onClick={() => setContactTeacher(null)}>
@@ -1360,6 +1670,16 @@ const TeachersView = ({ photos = {}, teachers = TEACHERS, setTeachers = () => {}
                 <a href={`https://wa.me/${contactTeacher.phone.replace(/[^0-9]/g, '')}`} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 border border-emerald-700/50 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 py-3 text-xs uppercase tracking-wider font-mono transition-colors">
                   <Send className="w-4 h-4" strokeWidth={2} /> WhatsApp
                 </a>
+              </div>
+
+              {/* Edit & Delete */}
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <button onClick={() => { setEditTeacher({...contactTeacher, subjects: [...(contactTeacher.subjects || [''])]}); setContactTeacher(null); }} className="flex items-center justify-center gap-2 border border-sky-700/50 bg-sky-500/5 hover:bg-sky-500/10 text-sky-300 py-2 text-[10px] uppercase tracking-wider font-mono transition-colors">
+                  <Pencil className="w-3 h-3" strokeWidth={2} /> Edit Details
+                </button>
+                <button onClick={() => deleteTeacher(contactTeacher)} className="flex items-center justify-center gap-2 border border-red-700/40 bg-red-500/5 hover:bg-red-500/10 text-red-300 py-2 text-[10px] uppercase tracking-wider font-mono transition-colors">
+                  <XCircle className="w-3 h-3" strokeWidth={2} /> Delete
+                </button>
               </div>
 
               {/* Quick stats */}
@@ -2768,11 +3088,13 @@ const DirectorPortal = ({ onLogout, role = 'director', photos = {}, notification
 };
 
 // ============ TEACHER PORTAL — MOBILE FIRST ============
-const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notifications = [], markAllRead = () => {}, cells = INITIAL_CELLS, currentTime = '08:00' }) => {
+const TeacherPortal = ({ onLogout, me = null, photos = {}, setPhotos = () => {}, notifications = [], markAllRead = () => {}, cells = INITIAL_CELLS, currentTime = '08:00' }) => {
+  // FIX BUG: Use logged-in user from props, NOT hardcoded ME. Fall back to ME only if somehow not provided.
+  const currentUser = me || ME;
   const [view, setView] = useState('today');
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
-  // Filter notifications for THIS teacher only
-  const myShortName = ME.name.split(' ')[0];
+  // Filter notifications for THIS teacher only — using dynamic logged-in user's first name
+  const myShortName = currentUser.name.split(' ')[0];
   const myNotifications = notifications.filter(n => n.teacher === myShortName);
   const myUnreadCount = myNotifications.filter(n => !n.read).length;
 
@@ -2817,7 +3139,7 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
   const [nextTopicInput, setNextTopicInput] = useState('');
   const [syllabusPct, setSyllabusPct] = useState(50);
 
-  const myPhoto = photos[ME.id];
+  const myPhoto = photos[currentUser.id];
 
   const handlePhotoUpload = (e) => {
     const file = e.target.files?.[0];
@@ -2825,13 +3147,13 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
     if (file.size > 5 * 1024 * 1024) { alert('Photo size should be under 5 MB'); return; }
     if (!file.type.startsWith('image/')) { alert('Please select an image file'); return; }
     const reader = new FileReader();
-    reader.onload = (ev) => setPhotos({ ...photos, [ME.id]: ev.target.result });
+    reader.onload = (ev) => setPhotos({ ...photos, [currentUser.id]: ev.target.result });
     reader.readAsDataURL(file);
   };
 
   const removePhoto = () => {
     const newPhotos = { ...photos };
-    delete newPhotos[ME.id];
+    delete newPhotos[currentUser.id];
     setPhotos(newPhotos);
   };
 
@@ -2880,15 +3202,15 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
       <header className="border-b border-stone-800 bg-stone-950 sticky top-0 z-10 backdrop-blur">
         <div className="px-5 py-4 flex items-center gap-3">
           {myPhoto ? (
-            <img src={myPhoto} alt={ME.name} className="w-10 h-10 object-cover border border-amber-700/40 shrink-0" />
+            <img src={myPhoto} alt={currentUser.name} className="w-10 h-10 object-cover border border-amber-700/40 shrink-0" />
           ) : (
             <div className="w-10 h-10 border border-amber-700/40 bg-amber-500/10 flex items-center justify-center text-amber-300 shrink-0" style={{fontFamily: 'Fraunces, serif'}}>
-              {ME.name.split(' ').slice(0,2).map(n=>n[0]).join('')}
+              {currentUser.name.split(' ').slice(0,2).map(n=>n[0]).join('')}
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-stone-100 text-sm truncate">{ME.name}</div>
-            <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mt-0.5">{ME.subjects[0]} · {ME.wing} Wing</div>
+            <div className="text-stone-100 text-sm truncate">{currentUser.name}</div>
+            <div className="text-[10px] uppercase tracking-wider text-stone-500 font-mono mt-0.5">{currentUser.subjects?.[0] || '—'} · {currentUser.wing} Wing</div>
           </div>
           <button onClick={() => setNotifPanelOpen(true)} className="relative text-stone-500 hover:text-amber-300 p-2 transition-colors" title="Notifications">
             <Bell className="w-4 h-4" strokeWidth={1.5} />
@@ -3092,10 +3414,10 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
               <div className="text-[10px] uppercase tracking-[0.25em] text-stone-500 font-mono mb-3">Profile Photo</div>
               <div className="flex items-center gap-4">
                 {myPhoto ? (
-                  <img src={myPhoto} alt={ME.name} className="w-20 h-20 object-cover border-2 border-amber-700/40 shrink-0" />
+                  <img src={myPhoto} alt={currentUser.name} className="w-20 h-20 object-cover border-2 border-amber-700/40 shrink-0" />
                 ) : (
                   <div className="w-20 h-20 border-2 border-dashed border-stone-700 bg-stone-900/60 flex items-center justify-center text-stone-500 text-xl shrink-0" style={{fontFamily: 'Fraunces, serif'}}>
-                    {ME.name.split(' ').slice(0,2).map(n=>n[0]).join('')}
+                    {currentUser.name.split(' ').slice(0,2).map(n=>n[0]).join('')}
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
@@ -3124,29 +3446,29 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
             <div className="grid grid-cols-3 gap-px bg-stone-800">
               <div className="bg-stone-950 p-4">
                 <div className="text-[9px] uppercase tracking-wider text-stone-500 font-mono">Today</div>
-                <div className="text-3xl font-light text-amber-300 mt-1" style={{fontFamily: 'Fraunces, serif'}}>{ME.todayHours}</div>
-                <div className="text-[9px] text-stone-600 font-mono">hours</div>
+                <div className="text-3xl font-light text-amber-300 mt-1" style={{fontFamily: 'Fraunces, serif'}}>{myClasses.length}</div>
+                <div className="text-[9px] text-stone-600 font-mono">classes</div>
               </div>
               <div className="bg-stone-950 p-4">
-                <div className="text-[9px] uppercase tracking-wider text-stone-500 font-mono">Week</div>
-                <div className="text-3xl font-light text-stone-100 mt-1" style={{fontFamily: 'Fraunces, serif'}}>{ME.weekHours}</div>
-                <div className="text-[9px] text-stone-600 font-mono">hours</div>
+                <div className="text-[9px] uppercase tracking-wider text-stone-500 font-mono">Wing</div>
+                <div className="text-2xl font-light text-stone-100 mt-1" style={{fontFamily: 'Fraunces, serif'}}>{currentUser.wing}</div>
+                <div className="text-[9px] text-stone-600 font-mono">section</div>
               </div>
               <div className="bg-stone-950 p-4">
-                <div className="text-[9px] uppercase tracking-wider text-stone-500 font-mono">Month</div>
-                <div className="text-3xl font-light text-stone-100 mt-1" style={{fontFamily: 'Fraunces, serif'}}>{ME.monthHours}</div>
-                <div className="text-[9px] text-stone-600 font-mono">hours</div>
+                <div className="text-[9px] uppercase tracking-wider text-stone-500 font-mono">Status</div>
+                <div className="text-xl font-light text-emerald-300 mt-1" style={{fontFamily: 'Fraunces, serif'}}>{currentUser.status === 'active' ? 'Active' : currentUser.status === 'leave' ? 'On Leave' : 'On Call'}</div>
+                <div className="text-[9px] text-stone-600 font-mono">duty</div>
               </div>
             </div>
 
             <div className="border border-stone-800 bg-stone-950/40 p-4">
               <div className="text-[10px] uppercase tracking-[0.25em] text-stone-500 font-mono mb-3">Profile</div>
               <div className="space-y-2 text-xs">
-                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Name</span><span className="text-stone-200">{ME.name}</span></div>
-                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Mobile</span><span className="text-stone-200 font-mono">{ME.phone}</span></div>
-                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Subject</span><span className="text-stone-200">{ME.subjects[0]}</span></div>
-                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Wing</span><span className="text-stone-200">{ME.wing}</span></div>
-                <div className="flex justify-between pb-2"><span className="text-stone-500">Avg load</span><span className="text-amber-300">Heavy (10 hr/day)</span></div>
+                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Name</span><span className="text-stone-200">{currentUser.name}</span></div>
+                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Mobile</span><span className="text-stone-200 font-mono">{currentUser.phone}</span></div>
+                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Subject</span><span className="text-stone-200">{currentUser.subjects?.[0] || '—'}</span></div>
+                <div className="flex justify-between border-b border-stone-800 pb-2"><span className="text-stone-500">Wing</span><span className="text-stone-200">{currentUser.wing}</span></div>
+                <div className="flex justify-between pb-2"><span className="text-stone-500">Classes today</span><span className="text-amber-300">{myClasses.length} assigned</span></div>
               </div>
             </div>
 
@@ -3336,6 +3658,7 @@ const TeacherPortal = ({ onLogout, photos = {}, setPhotos = () => {}, notificati
 // ============ MAIN ============
 export default function App() {
   const [role, setRole] = useState(null);
+  const [loggedInUser, setLoggedInUser] = useState(null); // matched user from login
   const [photos, setPhotos] = useState({}); // {teacherId: dataURL}
   const [notifications, setNotifications] = useState([]); // {id, timestamp, read, type, ...data}
   const [conflicts, setConflicts] = useState(CONFLICTS); // persists across view switches
@@ -3366,7 +3689,19 @@ export default function App() {
   const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   const clearNotifications = () => setNotifications([]);
 
-  if (!role) return <LoginScreen onLogin={setRole} />;
-  if (role === 'teacher') return <TeacherPortal onLogout={() => setRole(null)} photos={photos} setPhotos={setPhotos} notifications={notifications} markAllRead={markAllRead} cells={cells} currentTime={currentTime} />;
-  return <DirectorPortal onLogout={() => setRole(null)} role={role} photos={photos} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={cells} setCells={setCells} teachers={teachers} setTeachers={setTeachers} classrooms={classrooms} setClassrooms={setClassrooms} batches={batches} setBatches={setBatches} currentTime={currentTime} />;
+  // Login handler: stores both role and matched user
+  const handleLogin = (selectedRole, user) => {
+    setRole(selectedRole);
+    setLoggedInUser(user);
+  };
+
+  // Logout: clears both
+  const handleLogout = () => {
+    setRole(null);
+    setLoggedInUser(null);
+  };
+
+  if (!role) return <LoginScreen onLogin={handleLogin} teachers={teachers} />;
+  if (role === 'teacher') return <TeacherPortal onLogout={handleLogout} me={loggedInUser} photos={photos} setPhotos={setPhotos} notifications={notifications} markAllRead={markAllRead} cells={cells} currentTime={currentTime} />;
+  return <DirectorPortal onLogout={handleLogout} role={role} loggedInUser={loggedInUser} photos={photos} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={cells} setCells={setCells} teachers={teachers} setTeachers={setTeachers} classrooms={classrooms} setClassrooms={setClassrooms} batches={batches} setBatches={setBatches} currentTime={currentTime} />;
 }
