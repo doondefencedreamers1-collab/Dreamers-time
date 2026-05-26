@@ -8,10 +8,10 @@ import { Activity, Users, AlertTriangle, Search, Calendar, BookOpen, TrendingUp,
 // IMPORTANT: To change these phones, edit them here. In Phase 2 (Supabase), these will move to database.
 const SYSTEM_USERS = {
   director: [
-    { phone: '+91 98765 00001', name: 'Director', role: 'director' },
+    { phone: '+91 9193555556', name: 'Director', role: 'director' },
   ],
   manager: [
-    { phone: '+91 98765 00002', name: 'Schedule Manager', role: 'manager' },
+    { phone: '+91 7830000787', name: 'Schedule Manager', role: 'manager' },
   ],
 };
 
