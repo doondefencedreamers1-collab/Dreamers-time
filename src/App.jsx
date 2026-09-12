@@ -1688,7 +1688,7 @@ const CommandCenter = ({ role = 'director', cells = INITIAL_CELLS, conflicts = C
   );
 };
 
-const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeachers = () => {}, classrooms = [], setClassrooms = () => {}, batches = [], setBatches = () => {}, cells = {}, addTeacherToDB = async () => {}, updateTeacherInDB = async () => {}, deleteTeacherFromDB = async () => {}, addRoomToDB = async () => {}, updateRoomInDB = async () => {}, deleteRoomFromDB = async () => {}, addBatchToDB = async () => {}, updateBatchInDB = async () => {}, deleteBatchFromDB = async () => {}, timeSlots = [], addTimeSlotToDB = async () => {}, updateTimeSlotInDB = async () => {}, deleteTimeSlotFromDB = async () => {}, leaveRequests = [] }) => {
+const TeachersView = ({ role = 'director', photos = {}, setBatchActiveInDB = async () => false, batchSoftDeleteSupported = false, teachers = [], setTeachers = () => {}, classrooms = [], setClassrooms = () => {}, batches = [], setBatches = () => {}, cells = {}, addTeacherToDB = async () => {}, updateTeacherInDB = async () => {}, deleteTeacherFromDB = async () => {}, addRoomToDB = async () => {}, updateRoomInDB = async () => {}, deleteRoomFromDB = async () => {}, addBatchToDB = async () => {}, updateBatchInDB = async () => {}, deleteBatchFromDB = async () => {}, timeSlots = [], addTimeSlotToDB = async () => {}, updateTimeSlotInDB = async () => {}, deleteTimeSlotFromDB = async () => {}, leaveRequests = [] }) => {
   const isDirector = role === 'director';
   const [activeTab, setActiveTab] = useState('teachers'); // 'teachers' | 'classrooms' | 'batches' | 'slots'
   const [wingFilter, setWingFilter] = useState('All');
@@ -1806,6 +1806,21 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
     if (!confirm(msg)) return;
     await deleteBatchFromDB(batch.id);
     showToast(`✗ Batch ${batch.name} removed`);
+  };
+
+  // SOFT DELETE — batch ko timetable se hatao bina uska data mitaye (wapas laayi ja sakti hai)
+  const toggleBatchActive = async (batch) => {
+    const makeActive = isActiveBatch(batch) === false;
+    if (!makeActive) {
+      const msg = `Batch ${batch.name} ko INACTIVE karein?\n\n`
+        + `• Timetable, conflicts aur reports se turant hat jayegi\n`
+        + `• Uski classes, attendance aur topic history DB mein safe rahegi\n`
+        + `• Jab chaho wapas Active kar sakte ho\n\n`
+        + `(Hamesha ke liye mitane ke liye ✗ Delete button use karo — wo undo nahi hota.)`;
+      if (!confirm(msg)) return;
+    }
+    const ok = await setBatchActiveInDB(batch.id, makeActive);
+    if (ok) showToast(makeActive ? `✓ Batch ${batch.name} wapas active` : `⏸ Batch ${batch.name} inactive — data safe hai`);
   };
 
   // EDIT HANDLERS
@@ -1932,7 +1947,10 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
   const seniorCount = teachers.filter(t => t.wing === 'Senior' || t.wing === 'Both').length;
   const juniorCount = teachers.filter(t => t.wing === 'Junior' || t.wing === 'Both').length;
   const totalCapacity = classrooms.reduce((sum, r) => sum + r.capacity, 0);
-  const totalStudents = batches.reduce((sum, b) => sum + b.strength, 0);
+  // Sirf ACTIVE batches ke students — inactive batch ke students count mein nahi aane chahiye
+  const activeBatches = batches.filter(isActiveBatch);
+  const inactiveBatchCount = batches.length - activeBatches.length;
+  const totalStudents = activeBatches.reduce((sum, b) => sum + (b.strength || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -1950,7 +1968,7 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
             {activeTab === 'teachers' ? <>Teacher <span className="italic text-amber-300/90">roster</span></> : activeTab === 'classrooms' ? <>Classroom <span className="italic text-amber-300/90">inventory</span></> : <>Batch <span className="italic text-amber-300/90">groups</span></>}
           </h1>
           <p className="text-stone-500 text-sm mt-1">
-            {activeTab === 'teachers' ? <>{teachers.length} active · {seniorCount} Senior · {juniorCount} Junior · <span className="text-amber-400/70">tap any to call</span></> : activeTab === 'classrooms' ? <>{classrooms.length} rooms · total capacity {totalCapacity} students</> : <>{batches.length} batches · {totalStudents} total students · class teachers assigned</>}
+            {activeTab === 'teachers' ? <>{teachers.length} active · {seniorCount} Senior · {juniorCount} Junior · <span className="text-amber-400/70">tap any to call</span></> : activeTab === 'classrooms' ? <>{classrooms.length} rooms · total capacity {totalCapacity} students</> : <>{activeBatches.length} active batches · {totalStudents} total students{inactiveBatchCount > 0 && <> · <span className="text-stone-500">{inactiveBatchCount} inactive (data safe)</span></>}</>}
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
@@ -1977,7 +1995,7 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
           <MapPin className="w-3 h-3" /> Classrooms ({classrooms.length})
         </button>
         <button onClick={() => setActiveTab('batches')} className={`px-4 py-2 text-[10px] uppercase tracking-wider font-mono border flex items-center gap-2 transition-colors ${activeTab === 'batches' ? 'border-amber-600/50 bg-amber-500/10 text-amber-300' : 'border-stone-800 text-stone-500 hover:text-stone-300 hover:border-stone-700'}`}>
-          <Layers className="w-3 h-3" /> Batches ({batches.length})
+          <Layers className="w-3 h-3" /> Batches ({activeBatches.length})
         </button>
         <button onClick={() => setActiveTab('slots')} className={`px-4 py-2 text-[10px] uppercase tracking-wider font-mono border flex items-center gap-2 transition-colors ${activeTab === 'slots' ? 'border-amber-600/50 bg-amber-500/10 text-amber-300' : 'border-stone-800 text-stone-500 hover:text-stone-300 hover:border-stone-700'}`}>
           <Calendar className="w-3 h-3" /> Time Slots ({timeSlots.length})
@@ -2144,13 +2162,24 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
             };
             const cls = wingColors[b.wing] || 'border-stone-700 text-stone-300';
             const classTeacherFull = teachers.find(t => t.name.split(' ')[0] === b.classTeacher)?.name || (b.classTeacher ? `${b.classTeacher} Sir` : 'Unassigned');
+            // Inactive batch — data safe hai, bas timetable se hatti hui hai
+            const isActive = isActiveBatch(b);
             return (
-              <div key={b.id} className={`border ${cls.split(' ')[0]} bg-stone-950/40 hover:bg-stone-900/60 p-5 transition-all relative group`}>
+              <div key={b.id} className={`border ${isActive ? cls.split(' ')[0] : 'border-stone-800 border-dashed'} bg-stone-950/40 hover:bg-stone-900/60 p-5 transition-all relative group ${isActive ? '' : 'opacity-60'}`}>
                 <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                   <button onClick={() => setEditBatch({...b})} className="text-sky-400 hover:text-sky-300" title="Edit batch">
                     <Pencil className="w-4 h-4" />
                   </button>
-                  <button onClick={() => deleteBatch(b)} className="text-red-400 hover:text-red-300" title="Delete batch">
+                  {batchSoftDeleteSupported && (
+                    <button
+                      onClick={() => toggleBatchActive(b)}
+                      className={isActive ? 'text-amber-400 hover:text-amber-300' : 'text-emerald-400 hover:text-emerald-300'}
+                      title={isActive ? 'Inactive karo (data safe rahega)' : 'Wapas active karo'}
+                    >
+                      {isActive ? <Ban className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                    </button>
+                  )}
+                  <button onClick={() => deleteBatch(b)} className="text-red-400 hover:text-red-300" title="Hamesha ke liye delete karo (undo nahi hoga)">
                     <XCircle className="w-4 h-4" />
                   </button>
                 </div>
@@ -2159,8 +2188,11 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
                     <Layers className={`w-4 h-4 ${cls.split(' ')[1]}`} strokeWidth={2} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className={`text-lg ${cls.split(' ')[1]}`} style={{fontFamily: 'Fraunces, serif'}}>{b.name}</div>
-                    <div className="text-stone-500 text-[10px] uppercase tracking-wider font-mono mt-0.5">{b.wing} Wing</div>
+                    <div className={`text-lg ${isActive ? cls.split(' ')[1] : 'text-stone-400'}`} style={{fontFamily: 'Fraunces, serif'}}>{b.name}</div>
+                    <div className="text-stone-500 text-[10px] uppercase tracking-wider font-mono mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <span>{b.wing} Wing</span>
+                      {!isActive && <span className="border border-stone-700 bg-stone-900 text-stone-400 px-1.5 py-0.5 text-[8px]">Inactive · timetable se hata hua</span>}
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 pt-3 border-t border-stone-800 mb-3">
@@ -6827,7 +6859,7 @@ const AttendanceView = ({ teachers = [], attendanceRecords = [], leaveRequests =
 };
 
 // ============ DIRECTOR PORTAL ============
-const DirectorPortal = ({ onLogout, role = 'director', loggedInUser = null, photos = {}, orphanCellCount = 0, notifications = [], addNotification = () => {}, markAllRead = () => {}, clearNotifications = () => {}, conflicts = CONFLICTS, setConflicts = () => {}, cells = {}, cellsByDay = {}, todayDayKey = 'Mon', copyDayToDays = async () => {}, setCells = () => {}, saveCellToDB = async () => {}, teachers = [], setTeachers = () => {}, addTeacherToDB = async () => {}, updateTeacherInDB = async () => {}, deleteTeacherFromDB = async () => {}, classrooms = [], setClassrooms = () => {}, addRoomToDB = async () => {}, updateRoomInDB = async () => {}, deleteRoomFromDB = async () => {}, batches = [], setBatches = () => {}, addBatchToDB = async () => {}, updateBatchInDB = async () => {}, deleteBatchFromDB = async () => {}, timeSlots = [], addTimeSlotToDB = async () => {}, updateTimeSlotInDB = async () => {}, deleteTimeSlotFromDB = async () => {}, leaveRequests = [], reviewLeaveRequest = async () => {}, cancelLeaveRequest = async () => {}, updateLeaveCategory = async () => {}, changeLogs = [], whatsappLogs = [], markWhatsAppSent = async () => {}, deleteWhatsAppLog = async () => {}, logAndOpenWhatsApp = async () => {}, attendanceRecords = [], markAttendance = async () => {}, bulkMarkPresent = async () => {}, deleteAttendance = async () => {}, topicLogs = [], saveTopicLog = async () => false, deleteTopicLog = async () => {}, currentTime = '08:00' }) => {
+const DirectorPortal = ({ onLogout, role = 'director', loggedInUser = null, photos = {}, orphanCellCount = 0, setBatchActiveInDB = async () => false, batchSoftDeleteSupported = false, notifications = [], addNotification = () => {}, markAllRead = () => {}, clearNotifications = () => {}, conflicts = CONFLICTS, setConflicts = () => {}, cells = {}, cellsByDay = {}, todayDayKey = 'Mon', copyDayToDays = async () => {}, setCells = () => {}, saveCellToDB = async () => {}, teachers = [], setTeachers = () => {}, addTeacherToDB = async () => {}, updateTeacherInDB = async () => {}, deleteTeacherFromDB = async () => {}, classrooms = [], setClassrooms = () => {}, addRoomToDB = async () => {}, updateRoomInDB = async () => {}, deleteRoomFromDB = async () => {}, batches = [], setBatches = () => {}, addBatchToDB = async () => {}, updateBatchInDB = async () => {}, deleteBatchFromDB = async () => {}, timeSlots = [], addTimeSlotToDB = async () => {}, updateTimeSlotInDB = async () => {}, deleteTimeSlotFromDB = async () => {}, leaveRequests = [], reviewLeaveRequest = async () => {}, cancelLeaveRequest = async () => {}, updateLeaveCategory = async () => {}, changeLogs = [], whatsappLogs = [], markWhatsAppSent = async () => {}, deleteWhatsAppLog = async () => {}, logAndOpenWhatsApp = async () => {}, attendanceRecords = [], markAttendance = async () => {}, bulkMarkPresent = async () => {}, deleteAttendance = async () => {}, topicLogs = [], saveTopicLog = async () => false, deleteTopicLog = async () => {}, currentTime = '08:00' }) => {
   const isManager = role === 'manager';
   const [activeView, setActiveView] = useState(isManager ? 'timetable' : 'command');
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
@@ -6958,7 +6990,7 @@ const DirectorPortal = ({ onLogout, role = 'director', loggedInUser = null, phot
 
           <div className="p-4 md:p-8 max-w-[1600px]">
             {activeView === 'command' && <CommandCenter role={role} cells={cells} conflicts={conflicts} teachers={teachers} classrooms={classrooms} batches={batches} currentTime={currentTime} timeSlots={timeSlots} />}
-            {activeView === 'teachers' && <TeachersView role={role} photos={photos} teachers={teachers} setTeachers={setTeachers} classrooms={classrooms} setClassrooms={setClassrooms} batches={batches} setBatches={setBatches} cells={cells} addTeacherToDB={addTeacherToDB} updateTeacherInDB={updateTeacherInDB} deleteTeacherFromDB={deleteTeacherFromDB} addRoomToDB={addRoomToDB} updateRoomInDB={updateRoomInDB} deleteRoomFromDB={deleteRoomFromDB} addBatchToDB={addBatchToDB} updateBatchInDB={updateBatchInDB} deleteBatchFromDB={deleteBatchFromDB} timeSlots={timeSlots} addTimeSlotToDB={addTimeSlotToDB} updateTimeSlotInDB={updateTimeSlotInDB} deleteTimeSlotFromDB={deleteTimeSlotFromDB} leaveRequests={leaveRequests} />}
+            {activeView === 'teachers' && <TeachersView role={role} photos={photos} setBatchActiveInDB={setBatchActiveInDB} batchSoftDeleteSupported={batchSoftDeleteSupported} teachers={teachers} setTeachers={setTeachers} classrooms={classrooms} setClassrooms={setClassrooms} batches={batches} setBatches={setBatches} cells={cells} addTeacherToDB={addTeacherToDB} updateTeacherInDB={updateTeacherInDB} deleteTeacherFromDB={deleteTeacherFromDB} addRoomToDB={addRoomToDB} updateRoomInDB={updateRoomInDB} deleteRoomFromDB={deleteRoomFromDB} addBatchToDB={addBatchToDB} updateBatchInDB={updateBatchInDB} deleteBatchFromDB={deleteBatchFromDB} timeSlots={timeSlots} addTimeSlotToDB={addTimeSlotToDB} updateTimeSlotInDB={updateTimeSlotInDB} deleteTimeSlotFromDB={deleteTimeSlotFromDB} leaveRequests={leaveRequests} />}
             {activeView === 'free' && <FreeFinder teachers={teachers} cells={cells} timeSlots={timeSlots} currentTime={currentTime} addNotification={addNotification} />}
             {activeView === 'leaves' && <LeaveManagementView leaveRequests={leaveRequests} reviewLeaveRequest={reviewLeaveRequest} cancelLeaveRequest={cancelLeaveRequest} updateLeaveCategory={updateLeaveCategory} reviewerName={isManager ? 'Manager' : 'Director'} isDirector={!isManager} />}
             {activeView === 'attendance' && !isManager && <AttendanceView teachers={teachers} attendanceRecords={attendanceRecords} leaveRequests={leaveRequests} markAttendance={markAttendance} bulkMarkPresent={bulkMarkPresent} deleteAttendance={deleteAttendance} cells={cells} cellsByDay={cellsByDay} timeSlots={timeSlots} markedBy={isManager ? 'Manager' : 'Director'} />}
@@ -8799,6 +8831,21 @@ export default function App() {
     if (error) alert('Failed to delete batch: ' + error.message);
   };
 
+  // BATCH DEACTIVATE / REACTIVATE (soft delete)
+  // Hard delete se behtar: batch timetable se turant gayab ho jati hai par uski classes,
+  // attendance aur topic history DB mein safe rehti hai — aur wapas laayi ja sakti hai.
+  // Ye tabhi kaam karta hai jab batches table mein `is_active` column ho
+  // (dekho SUPABASE_MIGRATION.sql). Column na ho to UI ye button dikhata hi nahi.
+  const setBatchActiveInDB = async (id, makeActive) => {
+    const { error } = await supabase.from('batches').update({ is_active: makeActive }).eq('id', id);
+    if (error) {
+      console.error('Failed to change batch status:', error);
+      alert(`Batch ${makeActive ? 'activate' : 'deactivate'} nahi ho payi: ${error.message}`);
+      return false;
+    }
+    return true;
+  };
+
   // TIME SLOTS CRUD
   const addTimeSlotToDB = async (slot) => {
     const maxOrder = Math.max(0, ...timeSlots.map(s => s.sortOrder || 0));
@@ -9079,6 +9126,9 @@ export default function App() {
   // SINGLE SOURCE OF TRUTH: yahan ek hi jagah deleted/inactive batches ke cells filter ho jate hain,
   // isliye har view (timetable, analytics, attendance, topics, teacher portal) ko saaf data milta hai.
   const activeBatchNames = useMemo(() => getActiveBatchNames(batches), [batches]);
+  // Kya DB mein soft-delete column maujood hai? (SUPABASE_MIGRATION.sql chalane ke baad true ho jayega)
+  // select('*') karte hain isliye column hote hi rows mein aa jayega — koi extra query nahi.
+  const batchSoftDeleteSupported = batches.length > 0 && Object.prototype.hasOwnProperty.call(batches[0], 'is_active');
   const visibleCells = useMemo(() => filterCellsToActiveBatches(cells, activeBatchNames), [cells, activeBatchNames]);
   // Kitne cells hide hue — sirf director ko batane ke liye (DB se kuch delete nahi hota)
   const orphanCellCount = Object.keys(cells).length - Object.keys(visibleCells).length;
@@ -9103,5 +9153,5 @@ export default function App() {
 
   if (!role) return <LoginScreen onLogin={handleLogin} teachers={teachers} />;
   if (role === 'teacher') return <TeacherPortal onLogout={handleLogout} me={loggedInUser} photos={photos} setPhotos={setPhotosWithDB} notifications={notifications} markAllRead={markAllRead} cells={todayCells} cellsByDay={cellsByDay} currentTime={currentTime} timeSlots={timeSlots} submitLeaveRequest={submitLeaveRequest} leaveRequests={leaveRequests} cancelLeaveRequest={cancelLeaveRequest} attendanceRecords={attendanceRecords} topicLogs={topicLogs} saveTopicLog={saveTopicLog} teachers={teachers} />;
-  return <DirectorPortal onLogout={handleLogout} role={role} loggedInUser={loggedInUser} photos={photos} orphanCellCount={orphanCellCount} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={todayCells} cellsByDay={cellsByDay} todayDayKey={todayDayKey} copyDayToDays={copyDayToDays} setCells={setCells} saveCellToDB={saveCellToDB} teachers={teachers} setTeachers={setTeachers} addTeacherToDB={addTeacherToDB} updateTeacherInDB={updateTeacherInDB} deleteTeacherFromDB={deleteTeacherFromDB} classrooms={classrooms} setClassrooms={setClassrooms} addRoomToDB={addRoomToDB} updateRoomInDB={updateRoomInDB} deleteRoomFromDB={deleteRoomFromDB} batches={batches} setBatches={setBatches} addBatchToDB={addBatchToDB} updateBatchInDB={updateBatchInDB} deleteBatchFromDB={deleteBatchFromDB} timeSlots={timeSlots} addTimeSlotToDB={addTimeSlotToDB} updateTimeSlotInDB={updateTimeSlotInDB} deleteTimeSlotFromDB={deleteTimeSlotFromDB} leaveRequests={leaveRequests} reviewLeaveRequest={reviewLeaveRequest} cancelLeaveRequest={cancelLeaveRequest} updateLeaveCategory={updateLeaveCategory} changeLogs={changeLogs} whatsappLogs={whatsappLogs} markWhatsAppSent={markWhatsAppSent} deleteWhatsAppLog={deleteWhatsAppLog} logAndOpenWhatsApp={logAndOpenWhatsApp} attendanceRecords={attendanceRecords} markAttendance={markAttendance} bulkMarkPresent={bulkMarkPresent} deleteAttendance={deleteAttendance} topicLogs={topicLogs} saveTopicLog={saveTopicLog} deleteTopicLog={deleteTopicLog} updateTopicLog={updateTopicLog} currentTime={currentTime} />;
+  return <DirectorPortal onLogout={handleLogout} role={role} loggedInUser={loggedInUser} photos={photos} orphanCellCount={orphanCellCount} setBatchActiveInDB={setBatchActiveInDB} batchSoftDeleteSupported={batchSoftDeleteSupported} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={todayCells} cellsByDay={cellsByDay} todayDayKey={todayDayKey} copyDayToDays={copyDayToDays} setCells={setCells} saveCellToDB={saveCellToDB} teachers={teachers} setTeachers={setTeachers} addTeacherToDB={addTeacherToDB} updateTeacherInDB={updateTeacherInDB} deleteTeacherFromDB={deleteTeacherFromDB} classrooms={classrooms} setClassrooms={setClassrooms} addRoomToDB={addRoomToDB} updateRoomInDB={updateRoomInDB} deleteRoomFromDB={deleteRoomFromDB} batches={batches} setBatches={setBatches} addBatchToDB={addBatchToDB} updateBatchInDB={updateBatchInDB} deleteBatchFromDB={deleteBatchFromDB} timeSlots={timeSlots} addTimeSlotToDB={addTimeSlotToDB} updateTimeSlotInDB={updateTimeSlotInDB} deleteTimeSlotFromDB={deleteTimeSlotFromDB} leaveRequests={leaveRequests} reviewLeaveRequest={reviewLeaveRequest} cancelLeaveRequest={cancelLeaveRequest} updateLeaveCategory={updateLeaveCategory} changeLogs={changeLogs} whatsappLogs={whatsappLogs} markWhatsAppSent={markWhatsAppSent} deleteWhatsAppLog={deleteWhatsAppLog} logAndOpenWhatsApp={logAndOpenWhatsApp} attendanceRecords={attendanceRecords} markAttendance={markAttendance} bulkMarkPresent={bulkMarkPresent} deleteAttendance={deleteAttendance} topicLogs={topicLogs} saveTopicLog={saveTopicLog} deleteTopicLog={deleteTopicLog} updateTopicLog={updateTopicLog} currentTime={currentTime} />;
 }
