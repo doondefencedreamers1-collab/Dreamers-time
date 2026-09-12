@@ -263,6 +263,56 @@ const groupCellsByDay = (cells) => {
   return result;
 };
 
+// ============ ACTIVE BATCH / FACULTY FILTERS ============
+// cells.batch ek plain TEXT naam hai (koi FK nahi), isliye batch row delete hone ke baad
+// uske cells DB mein reh sakte hain — "orphan rows". Ye helpers un orphans ko har view se
+// bahar rakhte hain, DB se kuch delete kiye bina.
+//
+// Rule:
+//   • Batch roster mein nahi hai (deleted) YA inactive hai  → uske saare cells hide.
+//   • Teacher roster mein nahi hai (deleted)                → teacher-derived lists se hide,
+//     par batch grid mein cell dikhta rahega (red flag ke saath) taaki reassign kiya ja sake.
+//   • Teacher on leave (status !== 'active')                → dikhta hai: uski classes ko
+//     arrangement/substitute chahiye hota hai, isliye chhupana galat hoga.
+
+// batches table mein filhaal koi is_active/status/deleted_at column nahi hai (delete hard hota hai).
+// Ye check defensive hai — agar future mein aisa column add ho jaye to apne aap honour ho jayega.
+const isActiveBatch = (b) => {
+  if (!b || !b.name) return false;
+  if (b.deleted_at) return false;
+  if (b.is_active === false || b.active === false || b.archived === true) return false;
+  if (b.status && !['active', 'running', 'current'].includes(String(b.status).toLowerCase())) return false;
+  return true;
+};
+
+// Sirf active batches ke naam — cells ko filter karne ke liye lookup set
+const getActiveBatchNames = (batches = []) => new Set(batches.filter(isActiveBatch).map(b => b.name));
+
+// Teacher ka short name jaisa cells.teacher mein store hota hai
+const teacherShortName = (t) => t?.short_name || t?.name?.split(' ')[0] || '';
+
+// Roster mein maujood sabhi teachers (on-leave included) — deleted faculty isme nahi hogi
+const getRosterShortNames = (teachers = []) => new Set(teachers.map(teacherShortName).filter(Boolean));
+
+// Ek cell_key se batch name nikaalta hai. Full key ('Mon-08:00-NDA 1') aur short key ('08:00-NDA 1') dono chalte hain.
+const batchFromCellKey = (key) => {
+  const { shortKey } = parseCellKey(key);
+  const i = shortKey.indexOf('-');
+  return i === -1 ? '' : shortKey.slice(i + 1);
+};
+
+// Sirf active batches ke cells rakhta hai. Deleted/inactive batch ke orphan rows yahin drop ho jate hain.
+// NOTE: agar batches list khali hai (abhi load nahi hui, ya fetch fail) to filter skip — warna poora
+// timetable blank dikhega. Fail-open by design.
+const filterCellsToActiveBatches = (cells = {}, activeBatchNames) => {
+  if (!activeBatchNames || activeBatchNames.size === 0) return cells;
+  const out = {};
+  for (const [key, val] of Object.entries(cells)) {
+    if (activeBatchNames.has(batchFromCellKey(key))) out[key] = val;
+  }
+  return out;
+};
+
 const TEACHERS = [
   { id: 1, name: "Praveen Kumar Sir", subjects: ["NDA Mathematics"], wing: "Senior", slots: 9, hours: 10.00, status: "active" , phone: "+91 98765 43210" },
   { id: 2, name: "Shailendra Sir", subjects: ["Physics"], wing: "Senior", slots: 8, hours: 8.00, status: "active" , phone: "+91 98765 43211" },
@@ -1751,8 +1801,8 @@ const TeachersView = ({ role = 'director', photos = {}, teachers = [], setTeache
   const deleteBatch = async (batch) => {
     const orphanCount = Object.entries(cells).filter(([key]) => key.slice(key.split('-')[0].length + 1) === batch.name).length;
     const msg = orphanCount > 0
-      ? `Batch ${batch.name} mein ${orphanCount} classes assigned hain. Delete karoge?`
-      : `Delete batch ${batch.name}?`;
+      ? `Batch ${batch.name} mein aaj ki ${orphanCount} classes assigned hain.\n\nDelete karne par is batch ki SAARE dinon ki classes timetable se hat jayengi. Delete karoge?`
+      : `Delete batch ${batch.name}?\n\nIs batch ki saare dinon ki classes bhi timetable se hat jayengi.`;
     if (!confirm(msg)) return;
     await deleteBatchFromDB(batch.id);
     showToast(`✗ Batch ${batch.name} removed`);
@@ -3333,7 +3383,7 @@ const AnalyticsView = ({ teachers = [], cells = {}, classrooms = [], batches = [
   );
 };
 
-const TimetableView = ({ role = 'director', addNotification = () => {}, cells: _cellsToday = {}, cellsByDay = {}, todayDayKey = 'Mon', copyDayToDays = async () => {}, setCells = () => {}, saveCellToDB = async () => {}, teachers = [], classrooms = [], batches = [], timeSlots = [], currentTime = '08:00', logAndOpenWhatsApp = async () => {} }) => {
+const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCellCount = 0, cells: _cellsToday = {}, cellsByDay = {}, todayDayKey = 'Mon', copyDayToDays = async () => {}, setCells = () => {}, saveCellToDB = async () => {}, teachers = [], classrooms = [], batches = [], timeSlots = [], currentTime = '08:00', logAndOpenWhatsApp = async () => {} }) => {
   // Use dynamic time slots if available, otherwise fallback to default hardcoded
   const FALLBACK_TIMES = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00'];
   const times = timeSlots.length > 0 ? timeSlots.map(s => s.startTime) : FALLBACK_TIMES;
@@ -3341,9 +3391,13 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, cells: _
   const getSlot = (startTime) => timeSlots.find(s => s.startTime === startTime);
   const isManager = role === 'manager';
   // DYNAMIC: batch names list from batches state (NEW batches added auto-appear as columns)
-  const batchList = batches.map(b => b.name);
+  // Sirf ACTIVE batches — deleted/inactive batch kabhi column nahi banti
+  const activeBatchList = batches.filter(isActiveBatch);
+  const batchList = activeBatchList.map(b => b.name);
   // Batch → strength lookup for capacity warnings
-  const batchStrengthMap = batches.reduce((acc, b) => { acc[b.name] = b.strength; return acc; }, {});
+  const batchStrengthMap = activeBatchList.reduce((acc, b) => { acc[b.name] = b.strength; return acc; }, {});
+  // Roster mein maujood faculty (on-leave included). Jo isme nahi hai = delete ho chuki faculty.
+  const rosterShortNames = getRosterShortNames(teachers);
   const [assignSlot, setAssignSlot] = useState(null);
   const [pickSubject, setPickSubject] = useState('Maths');
   const [pickTeacher, setPickTeacher] = useState('Praveen');
@@ -4060,6 +4114,18 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, cells: _
         )}
       </div>
 
+      {/* ORPHAN ROWS NOTICE — deleted/inactive batch ke cells DB mein bache hain.
+          View se hide ho chuke hain; yahan sirf batate hain, delete kuch nahi karte. */}
+      {orphanCellCount > 0 && role !== 'teacher' && (
+        <div className="border border-amber-700/40 bg-amber-500/[0.06] px-3 py-2 flex items-start gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" strokeWidth={2} />
+          <div className="text-[10px] font-mono text-amber-200/90 leading-relaxed">
+            <span className="text-amber-300">{orphanCellCount} purani class rows</span> aisi batches ki hain jo ab roster mein nahi hain — timetable se hide kar di gayi hain.
+            <span className="text-amber-200/60"> DB se kuch delete nahi hua; cleanup ke liye admin se kaho.</span>
+          </div>
+        </div>
+      )}
+
       {/* DAILY VIEW — time x batches */}
       {viewMode === 'daily' && (
         <div className="border border-stone-800 bg-stone-950/40 overflow-x-auto">
@@ -4116,6 +4182,8 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, cells: _
                     );
                     const cls = colorMap[cell.subj] || 'border-stone-700 text-stone-300';
                     const isInConflict = conflictingCells.has(key);
+                    // Teacher roster se hata di gayi hai par cell mein naam bacha hua hai → reassign chahiye
+                    const isStaleTeacher = !!cell.tch && !rosterShortNames.has(cell.tch);
                     return (
                       <td key={b} className="border-l border-stone-800/60 px-2 py-2">
                         <div onClick={() => openAssign(key)} className={`border ${cls} bg-stone-950/80 px-2 py-2 hover:bg-stone-900 cursor-pointer transition-all relative ${isInConflict ? 'ring-2 ring-red-500/70 shadow-[0_0_12px_rgba(239,68,68,0.3)]' : isLiveCell ? 'ring-2 ring-emerald-500/60 shadow-[0_0_10px_rgba(16,185,129,0.25)]' : ''} ${role !== 'teacher' && !isInConflict ? 'hover:ring-1 hover:ring-amber-500/40' : ''}`}>
@@ -4130,7 +4198,9 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, cells: _
                             <span className="text-[9px] text-amber-300/90 font-mono font-medium tracking-wider">{cell.room || '—'}</span>
                           </div>
                           <div className={`text-xs ${cls.split(' ')[1]}`} style={{fontFamily: 'Fraunces, serif'}}>{cell.subj}</div>
-                          <div className={`text-[9px] font-mono mt-0.5 ${isInConflict ? 'text-red-300' : slotStatus === 'completed' ? 'text-stone-600' : 'text-stone-500'}`}>{cell.tch}</div>
+                          <div className={`text-[9px] font-mono mt-0.5 ${isStaleTeacher ? 'text-red-400' : isInConflict ? 'text-red-300' : slotStatus === 'completed' ? 'text-stone-600' : 'text-stone-500'}`}>
+                            {cell.tch}{isStaleTeacher && <span className="text-red-500/80"> · removed, reassign</span>}
+                          </div>
                         </div>
                       </td>
                     );
@@ -4195,7 +4265,11 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, cells: _
 
       {/* BY TEACHER VIEW — time x teachers */}
       {viewMode === 'byTeacher' && (() => {
-        const usedTeachers = [...new Set(Object.values(cells).map(c => c.tch))].sort();
+        // Sirf current roster ki faculty — delete ho chuki teacher ka naam cells mein bacha reh sakta hai,
+        // usse column nahi banna chahiye
+        const usedTeachers = [...new Set(Object.values(cells).map(c => c.tch).filter(Boolean))]
+          .filter(t => rosterShortNames.has(t))
+          .sort();
         const findByTeacher = (time, teacher) => {
           const found = Object.entries(cells).find(([key, c]) => key.startsWith(time + '-') && c.tch === teacher);
           if (!found) return null;
@@ -4863,8 +4937,15 @@ const TopicTrackingView = ({ teachers = [], cells = {}, batches = [], cellsByDay
   }
 
   // Filter dropdowns options
-  const uniqueBatches = ['All', ...Array.from(new Set([...threads.map(t => t.batch), ...topicLogs.map(l => l.batch)])).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))];
-  const uniqueTeachers = ['All', ...Array.from(new Set([...allCells.map(c => c.tch), ...topicLogs.map(l => l.teacher_short_name)])).filter(Boolean).sort()];
+  // Filters sirf CURRENT roster se — purane topic logs deleted batch/faculty ko dropdown mein wapas na le aayein
+  const activeBatchNameSet = getActiveBatchNames(batches);
+  const rosterShortNames = getRosterShortNames(teachers);
+  const uniqueBatches = ['All', ...Array.from(new Set([...threads.map(t => t.batch), ...topicLogs.map(l => l.batch)]))
+    .filter(b => b && (activeBatchNameSet.size === 0 || activeBatchNameSet.has(b)))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))];
+  const uniqueTeachers = ['All', ...Array.from(new Set([...allCells.map(c => c.tch), ...topicLogs.map(l => l.teacher_short_name)]))
+    .filter(t => t && (rosterShortNames.size === 0 || rosterShortNames.has(t)))
+    .sort()];
   const uniqueSubjects = ['All', ...Array.from(new Set([...allCells.map(c => c.subj), ...topicLogs.map(l => l.subject)])).filter(Boolean).sort()];
   const statusOptions = ['All', 'Completed', 'Partial', 'Cancelled', 'Substitute', 'Revision', 'Test', 'Doubt'];
 
@@ -6746,7 +6827,7 @@ const AttendanceView = ({ teachers = [], attendanceRecords = [], leaveRequests =
 };
 
 // ============ DIRECTOR PORTAL ============
-const DirectorPortal = ({ onLogout, role = 'director', loggedInUser = null, photos = {}, notifications = [], addNotification = () => {}, markAllRead = () => {}, clearNotifications = () => {}, conflicts = CONFLICTS, setConflicts = () => {}, cells = {}, cellsByDay = {}, todayDayKey = 'Mon', copyDayToDays = async () => {}, setCells = () => {}, saveCellToDB = async () => {}, teachers = [], setTeachers = () => {}, addTeacherToDB = async () => {}, updateTeacherInDB = async () => {}, deleteTeacherFromDB = async () => {}, classrooms = [], setClassrooms = () => {}, addRoomToDB = async () => {}, updateRoomInDB = async () => {}, deleteRoomFromDB = async () => {}, batches = [], setBatches = () => {}, addBatchToDB = async () => {}, updateBatchInDB = async () => {}, deleteBatchFromDB = async () => {}, timeSlots = [], addTimeSlotToDB = async () => {}, updateTimeSlotInDB = async () => {}, deleteTimeSlotFromDB = async () => {}, leaveRequests = [], reviewLeaveRequest = async () => {}, cancelLeaveRequest = async () => {}, updateLeaveCategory = async () => {}, changeLogs = [], whatsappLogs = [], markWhatsAppSent = async () => {}, deleteWhatsAppLog = async () => {}, logAndOpenWhatsApp = async () => {}, attendanceRecords = [], markAttendance = async () => {}, bulkMarkPresent = async () => {}, deleteAttendance = async () => {}, topicLogs = [], saveTopicLog = async () => false, deleteTopicLog = async () => {}, currentTime = '08:00' }) => {
+const DirectorPortal = ({ onLogout, role = 'director', loggedInUser = null, photos = {}, orphanCellCount = 0, notifications = [], addNotification = () => {}, markAllRead = () => {}, clearNotifications = () => {}, conflicts = CONFLICTS, setConflicts = () => {}, cells = {}, cellsByDay = {}, todayDayKey = 'Mon', copyDayToDays = async () => {}, setCells = () => {}, saveCellToDB = async () => {}, teachers = [], setTeachers = () => {}, addTeacherToDB = async () => {}, updateTeacherInDB = async () => {}, deleteTeacherFromDB = async () => {}, classrooms = [], setClassrooms = () => {}, addRoomToDB = async () => {}, updateRoomInDB = async () => {}, deleteRoomFromDB = async () => {}, batches = [], setBatches = () => {}, addBatchToDB = async () => {}, updateBatchInDB = async () => {}, deleteBatchFromDB = async () => {}, timeSlots = [], addTimeSlotToDB = async () => {}, updateTimeSlotInDB = async () => {}, deleteTimeSlotFromDB = async () => {}, leaveRequests = [], reviewLeaveRequest = async () => {}, cancelLeaveRequest = async () => {}, updateLeaveCategory = async () => {}, changeLogs = [], whatsappLogs = [], markWhatsAppSent = async () => {}, deleteWhatsAppLog = async () => {}, logAndOpenWhatsApp = async () => {}, attendanceRecords = [], markAttendance = async () => {}, bulkMarkPresent = async () => {}, deleteAttendance = async () => {}, topicLogs = [], saveTopicLog = async () => false, deleteTopicLog = async () => {}, currentTime = '08:00' }) => {
   const isManager = role === 'manager';
   const [activeView, setActiveView] = useState(isManager ? 'timetable' : 'command');
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
@@ -6885,7 +6966,7 @@ const DirectorPortal = ({ onLogout, role = 'director', loggedInUser = null, phot
             {activeView === 'whatsapp' && <WhatsAppLogView whatsappLogs={whatsappLogs} markWhatsAppSent={markWhatsAppSent} deleteWhatsAppLog={deleteWhatsAppLog} />}
             {activeView === 'conflicts' && <ConflictsView conflicts={conflicts} setConflicts={setConflicts} cells={cells} onGoToTimetable={() => setActiveView('timetable')} />}
             {activeView === 'analytics' && <AnalyticsView teachers={teachers} cells={cells} classrooms={classrooms} batches={batches} timeSlots={timeSlots} cellsByDay={cellsByDay} />}
-            {activeView === 'timetable' && <TimetableView role={role} addNotification={addNotification} cells={cells} cellsByDay={cellsByDay} todayDayKey={todayDayKey} copyDayToDays={copyDayToDays} setCells={setCells} saveCellToDB={saveCellToDB} teachers={teachers} classrooms={classrooms} batches={batches} timeSlots={timeSlots} currentTime={currentTime} logAndOpenWhatsApp={logAndOpenWhatsApp} />}
+            {activeView === 'timetable' && <TimetableView role={role} addNotification={addNotification} orphanCellCount={orphanCellCount} cells={cells} cellsByDay={cellsByDay} todayDayKey={todayDayKey} copyDayToDays={copyDayToDays} setCells={setCells} saveCellToDB={saveCellToDB} teachers={teachers} classrooms={classrooms} batches={batches} timeSlots={timeSlots} currentTime={currentTime} logAndOpenWhatsApp={logAndOpenWhatsApp} />}
             {activeView === 'topics' && <TopicTrackingView teachers={teachers} cells={cells} batches={batches} cellsByDay={cellsByDay} topicLogs={topicLogs} deleteTopicLog={deleteTopicLog} logAndOpenWhatsApp={logAndOpenWhatsApp} todayDayKey={todayDayKey} currentTime={currentTime} />}
             {activeView === 'import' && <ImportView onGoToConflicts={() => setActiveView('conflicts')} />}
           </div>
@@ -8463,8 +8544,12 @@ export default function App() {
   const copyDayToDays = async (sourceDay, targetDays) => {
     if (!sourceDay || !targetDays || targetDays.length === 0) return { copied: 0, errors: 0 };
     // Get source cells (those starting with sourceDay-)
+    // Deleted/inactive batch ke orphan cells copy NAHI hone chahiye — warna orphans naye dinon mein bhi phail jate hain
+    const activeNames = getActiveBatchNames(batches);
     const sourcePrefix = `${sourceDay}-`;
-    const sourceCells = Object.entries(cells).filter(([key]) => key.startsWith(sourcePrefix));
+    const sourceCells = Object.entries(cells).filter(([key]) =>
+      key.startsWith(sourcePrefix) && (activeNames.size === 0 || activeNames.has(batchFromCellKey(key)))
+    );
     if (sourceCells.length === 0) {
       alert(`${sourceDay} mein koi classes nahi hain — pehle source day setup karo.`);
       return { copied: 0, errors: 0 };
@@ -8684,10 +8769,30 @@ export default function App() {
   const deleteBatchFromDB = async (id) => {
     // STEP 1: Fetch batch name first
     const { data: batch } = await supabase.from('batches').select('name').eq('id', id).single();
-    // STEP 2: Cascade delete cells for this batch
+    // STEP 2: Cascade delete cells for this batch.
+    // cells.batch ek plain text naam hai (koi FK/ON DELETE CASCADE nahi), isliye cascade app ko karna padta hai.
+    // Agar ye step fail ho gaya to batch row DELETE NAHI karte — warna DB mein orphan cells reh jate hain
+    // jinka koi parent batch nahi bachta. Pehle ye error sirf console mein jata tha aur batch delete ho jati thi.
     if (batch?.name) {
       const { error: cellDelErr } = await supabase.from('cells').delete().eq('batch', batch.name);
-      if (cellDelErr) console.error('Failed to delete batch cells:', cellDelErr);
+      if (cellDelErr) {
+        console.error('Failed to delete batch cells:', cellDelErr);
+        alert(`Batch "${batch.name}" ki classes delete nahi ho paayin (${cellDelErr.message}).\n\nBatch delete rok di gayi hai taaki orphan rows na banein. Dobara try karo.`);
+        return;
+      }
+      // Safety net: purani rows jinme batch column null/mismatch hai, wo cell_key se pakdi jati hain
+      // ('Mon-08:00-NDA 1' — naam hamesha key ke aakhir mein hota hai)
+      const { data: leftovers } = await supabase.from('cells').select('cell_key').like('cell_key', `%-${batch.name}`);
+      // LIKE ke wildcards (%, _) se over-match na ho, isliye exact naam dobara verify karte hain
+      const stale = (leftovers || []).filter(r => batchFromCellKey(r.cell_key) === batch.name);
+      if (stale.length > 0) {
+        const { error: staleErr } = await supabase.from('cells').delete().in('cell_key', stale.map(r => r.cell_key));
+        if (staleErr) {
+          console.error('Failed to delete leftover cells:', staleErr);
+          alert(`Batch "${batch.name}" ki ${stale.length} purani rows delete nahi ho paayin. Batch delete rok di gayi hai.`);
+          return;
+        }
+      }
     }
     // STEP 3: Delete batch row
     const { error } = await supabase.from('batches').delete().eq('id', id);
@@ -8971,7 +9076,13 @@ export default function App() {
   };
 
   // DAY-AWARE: Group cells by day, find today's day key (must be BEFORE any early return — React Hooks rule)
-  const cellsByDay = useMemo(() => groupCellsByDay(cells), [cells]);
+  // SINGLE SOURCE OF TRUTH: yahan ek hi jagah deleted/inactive batches ke cells filter ho jate hain,
+  // isliye har view (timetable, analytics, attendance, topics, teacher portal) ko saaf data milta hai.
+  const activeBatchNames = useMemo(() => getActiveBatchNames(batches), [batches]);
+  const visibleCells = useMemo(() => filterCellsToActiveBatches(cells, activeBatchNames), [cells, activeBatchNames]);
+  // Kitne cells hide hue — sirf director ko batane ke liye (DB se kuch delete nahi hota)
+  const orphanCellCount = Object.keys(cells).length - Object.keys(visibleCells).length;
+  const cellsByDay = useMemo(() => groupCellsByDay(visibleCells), [visibleCells]);
   const todayDayKey = getISTDay();
   const todayCells = cellsByDay[todayDayKey] || {};
 
@@ -8992,5 +9103,5 @@ export default function App() {
 
   if (!role) return <LoginScreen onLogin={handleLogin} teachers={teachers} />;
   if (role === 'teacher') return <TeacherPortal onLogout={handleLogout} me={loggedInUser} photos={photos} setPhotos={setPhotosWithDB} notifications={notifications} markAllRead={markAllRead} cells={todayCells} cellsByDay={cellsByDay} currentTime={currentTime} timeSlots={timeSlots} submitLeaveRequest={submitLeaveRequest} leaveRequests={leaveRequests} cancelLeaveRequest={cancelLeaveRequest} attendanceRecords={attendanceRecords} topicLogs={topicLogs} saveTopicLog={saveTopicLog} teachers={teachers} />;
-  return <DirectorPortal onLogout={handleLogout} role={role} loggedInUser={loggedInUser} photos={photos} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={todayCells} cellsByDay={cellsByDay} todayDayKey={todayDayKey} copyDayToDays={copyDayToDays} setCells={setCells} saveCellToDB={saveCellToDB} teachers={teachers} setTeachers={setTeachers} addTeacherToDB={addTeacherToDB} updateTeacherInDB={updateTeacherInDB} deleteTeacherFromDB={deleteTeacherFromDB} classrooms={classrooms} setClassrooms={setClassrooms} addRoomToDB={addRoomToDB} updateRoomInDB={updateRoomInDB} deleteRoomFromDB={deleteRoomFromDB} batches={batches} setBatches={setBatches} addBatchToDB={addBatchToDB} updateBatchInDB={updateBatchInDB} deleteBatchFromDB={deleteBatchFromDB} timeSlots={timeSlots} addTimeSlotToDB={addTimeSlotToDB} updateTimeSlotInDB={updateTimeSlotInDB} deleteTimeSlotFromDB={deleteTimeSlotFromDB} leaveRequests={leaveRequests} reviewLeaveRequest={reviewLeaveRequest} cancelLeaveRequest={cancelLeaveRequest} updateLeaveCategory={updateLeaveCategory} changeLogs={changeLogs} whatsappLogs={whatsappLogs} markWhatsAppSent={markWhatsAppSent} deleteWhatsAppLog={deleteWhatsAppLog} logAndOpenWhatsApp={logAndOpenWhatsApp} attendanceRecords={attendanceRecords} markAttendance={markAttendance} bulkMarkPresent={bulkMarkPresent} deleteAttendance={deleteAttendance} topicLogs={topicLogs} saveTopicLog={saveTopicLog} deleteTopicLog={deleteTopicLog} updateTopicLog={updateTopicLog} currentTime={currentTime} />;
+  return <DirectorPortal onLogout={handleLogout} role={role} loggedInUser={loggedInUser} photos={photos} orphanCellCount={orphanCellCount} notifications={notifications} addNotification={addNotification} markAllRead={markAllRead} clearNotifications={clearNotifications} conflicts={conflicts} setConflicts={setConflicts} cells={todayCells} cellsByDay={cellsByDay} todayDayKey={todayDayKey} copyDayToDays={copyDayToDays} setCells={setCells} saveCellToDB={saveCellToDB} teachers={teachers} setTeachers={setTeachers} addTeacherToDB={addTeacherToDB} updateTeacherInDB={updateTeacherInDB} deleteTeacherFromDB={deleteTeacherFromDB} classrooms={classrooms} setClassrooms={setClassrooms} addRoomToDB={addRoomToDB} updateRoomInDB={updateRoomInDB} deleteRoomFromDB={deleteRoomFromDB} batches={batches} setBatches={setBatches} addBatchToDB={addBatchToDB} updateBatchInDB={updateBatchInDB} deleteBatchFromDB={deleteBatchFromDB} timeSlots={timeSlots} addTimeSlotToDB={addTimeSlotToDB} updateTimeSlotInDB={updateTimeSlotInDB} deleteTimeSlotFromDB={deleteTimeSlotFromDB} leaveRequests={leaveRequests} reviewLeaveRequest={reviewLeaveRequest} cancelLeaveRequest={cancelLeaveRequest} updateLeaveCategory={updateLeaveCategory} changeLogs={changeLogs} whatsappLogs={whatsappLogs} markWhatsAppSent={markWhatsAppSent} deleteWhatsAppLog={deleteWhatsAppLog} logAndOpenWhatsApp={logAndOpenWhatsApp} attendanceRecords={attendanceRecords} markAttendance={markAttendance} bulkMarkPresent={bulkMarkPresent} deleteAttendance={deleteAttendance} topicLogs={topicLogs} saveTopicLog={saveTopicLog} deleteTopicLog={deleteTopicLog} updateTopicLog={updateTopicLog} currentTime={currentTime} />;
 }
