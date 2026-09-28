@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Activity, Users, AlertTriangle, Search, Calendar, BookOpen, TrendingUp, Bell, ChevronRight, ArrowRight, Layers, Radio, Coffee, Phone, Upload, FileSpreadsheet, LogOut, Lock, ShieldCheck, Home, ClipboardList, CalendarOff, UserCheck, ArrowLeft, Send, CheckCircle2, XCircle, AlertCircle, BookMarked, Target, MapPin, Pencil, Copy, Printer, Download, MessageCircle, Clock, FileText, Banknote, Eye } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
@@ -311,6 +311,45 @@ const filterCellsToActiveBatches = (cells = {}, activeBatchNames) => {
     if (activeBatchNames.has(batchFromCellKey(key))) out[key] = val;
   }
   return out;
+};
+
+// ============ SUPABASE HELPERS ============
+// Supabase/PostgREST error ko seedhi bhasha mein samjhata hai (toast/alert ke liye)
+const explainDbError = (error) => {
+  if (!error) return 'Unknown error';
+  const code = error.code || '';
+  const msg = error.message || String(error);
+  if (code === '42501' || /row-level security|permission denied/i.test(msg)) {
+    return `Permission (RLS) ne rok diya: ${msg}. Supabase SQL Editor mein TIMETABLE_FIX.sql chalao.`;
+  }
+  if (code === '42P10' || /no unique or exclusion constraint/i.test(msg)) {
+    return `cell_key par UNIQUE constraint nahi hai: ${msg}. TIMETABLE_FIX.sql chalao.`;
+  }
+  if (code === 'PGRST204' || /schema cache/i.test(msg)) {
+    return `Column DB mein nahi mila / schema cache purana hai: ${msg}. SQL Editor mein: NOTIFY pgrst, 'reload schema';`;
+  }
+  if (code === '57014' || /statement timeout/i.test(msg)) {
+    return `Database timeout: ${msg}. Thodi der baad dobara try karo.`;
+  }
+  if (/Failed to fetch|NetworkError|network/i.test(msg)) {
+    return `Internet/Supabase connection fail: ${msg}`;
+  }
+  return code ? `${msg} (code ${code})` : msg;
+};
+
+// PostgREST ek request mein max ~1000 rows deta hai (Supabase default "Max rows").
+// Timetable mein 7 din × slots × batches aasani se 1000 paar kar jata hai — tab baaki rows
+// CHUPCHAP gayab ho jati thi aur edit kiya hua period refresh ke baad "wapas purana/khali" dikhta tha.
+// Ye helper pages mein saari rows laata hai (stable order by id).
+const fetchAllRows = async (buildQuery, pageSize = 1000) => {
+  const all = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery().order('id', { ascending: true }).range(from, from + pageSize - 1);
+    if (error) return { data: null, error };
+    all.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return { data: all, error: null };
 };
 
 const TEACHERS = [
@@ -3885,8 +3924,14 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
     const isUpdate = !!existing;
     const newCellData = { subj: pickSubject, tch: pickTeacher, room: pickRoom };
 
-    // Save to Supabase (saveCellToDB handles optimistic update + DB sync)
-    if (saveCellToDB) await saveCellToDB(selectedDay, assignSlot, newCellData);
+    // Save to Supabase (saveCellToDB handles optimistic update + DB sync + rollback on failure)
+    const result = saveCellToDB ? await saveCellToDB(selectedDay, assignSlot, newCellData) : { ok: true };
+    if (!result || result.ok === false) {
+      // Save FAIL — modal khula rakho taaki dobara try ho sake, notification/WhatsApp mat bhejo
+      setSaveToast({ msg: `✗ Save nahi hua (${slotBatch} @ ${slotTime}, ${selectedDay}): ${result?.message || 'Unknown error'}`, type: 'error' });
+      setTimeout(() => setSaveToast(null), 9000);
+      return false;
+    }
 
     // Fire notification & toast (for both Director and Manager)
     if (role !== 'teacher') {
@@ -3923,6 +3968,7 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
       setTimeout(() => setSaveToast(null), 4500);
     }
     setAssignSlot(null);
+    return true;
   };
 
   const clearSlot = async () => {
@@ -3930,8 +3976,13 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
     const slotBatch = assignSlot.slice(slotTime.length + 1);
     const existing = cells[assignSlot];
 
-    // Delete from Supabase (saveCellToDB handles optimistic update + DB delete)
-    if (saveCellToDB) await saveCellToDB(selectedDay, assignSlot, null);
+    // Delete from Supabase (saveCellToDB handles optimistic update + DB delete + rollback on failure)
+    const result = saveCellToDB ? await saveCellToDB(selectedDay, assignSlot, null) : { ok: true };
+    if (!result || result.ok === false) {
+      setSaveToast({ msg: `✗ Remove nahi hua (${slotBatch} @ ${slotTime}, ${selectedDay}): ${result?.message || 'Unknown error'}`, type: 'error' });
+      setTimeout(() => setSaveToast(null), 9000);
+      return;
+    }
 
     if (existing) {
       addNotification({
@@ -4009,8 +4060,8 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
   return (
     <div className="space-y-6">
       {saveToast && (
-        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 border backdrop-blur px-4 py-3 text-xs max-w-md shadow-2xl flex items-start gap-2 animate-in fade-in slide-in-from-top ${saveToast.type === 'warning' ? 'border-amber-600/60 bg-amber-500/15 text-amber-200' : saveToast.type === 'info' ? 'border-sky-700/50 bg-sky-500/10 text-sky-200' : 'border-emerald-700/50 bg-emerald-500/10 text-emerald-200'}`}>
-          {saveToast.type === 'warning' ? <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> : saveToast.type === 'info' ? <Bell className="w-4 h-4 shrink-0 mt-0.5" /> : <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />}
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 border backdrop-blur px-4 py-3 text-xs max-w-md shadow-2xl flex items-start gap-2 animate-in fade-in slide-in-from-top ${saveToast.type === 'error' ? 'border-red-600/60 bg-red-500/15 text-red-200' : saveToast.type === 'warning' ? 'border-amber-600/60 bg-amber-500/15 text-amber-200' : saveToast.type === 'info' ? 'border-sky-700/50 bg-sky-500/10 text-sky-200' : 'border-emerald-700/50 bg-emerald-500/10 text-emerald-200'}`}>
+          {saveToast.type === 'error' || saveToast.type === 'warning' ? <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> : saveToast.type === 'info' ? <Bell className="w-4 h-4 shrink-0 mt-0.5" /> : <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />}
           <span className="flex-1">{saveToast.msg}</span>
           <button onClick={() => setSaveToast(null)} className="opacity-70 hover:opacity-100"><XCircle className="w-3.5 h-3.5" /></button>
         </div>
@@ -4613,7 +4664,8 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
                 const slotTime = assignSlot.split('-')[0];
                 const slotBatch = assignSlot.slice(slotTime.length + 1);
                 const isUpdate = !!cells[assignSlot];
-                await saveAssign();
+                const saved = await saveAssign();
+                if (!saved) return; // save fail hua — WhatsApp mat bhejo
                 // Find teacher's phone
                 const t = teachers.find(t => (t.short_name || t.name?.split(' ')[0]) === pickTeacher);
                 if (t?.phone) {
@@ -4791,10 +4843,10 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
                   setCopyInProgress(false);
                   setShowCopyModal(false);
                   setSaveToast({
-                    msg: `✓ Copied ${selectedDay} → ${targets.join(', ')} · ${result.copied} cells inserted${result.errors > 0 ? ` · ${result.errors} errors` : ''}`,
-                    type: result.errors > 0 ? 'warning' : 'success',
+                    msg: `✓ Copied ${selectedDay} → ${targets.join(', ')} · ${result.copied} cells inserted${result.errors > 0 ? ` · ${result.errors} errors — ${result.firstError || 'console dekho'}` : ''}`,
+                    type: result.errors > 0 ? 'error' : 'success',
                   });
-                  setTimeout(() => setSaveToast(null), 5000);
+                  setTimeout(() => setSaveToast(null), result.errors > 0 ? 9000 : 5000);
                 }}
                 className="ml-auto px-4 py-2 text-[10px] uppercase tracking-wider font-mono border border-sky-600/50 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
               >
@@ -8352,13 +8404,18 @@ export default function App() {
   };
 
   // LOAD ALL DATA FROM SUPABASE ON MOUNT
+  // Har load ko ek number milta hai. Realtime events ek saath kai loads chala dete hain — agar purana
+  // (save se pehle shuru hua) load baad mein pura ho to wo naye data ko overwrite kar deta tha.
+  // Ab sirf SABSE NAYA load hi state set karta hai.
+  const loadSeqRef = useRef(0);
   const loadAllData = async () => {
+    const mySeq = ++loadSeqRef.current;
     try {
       const [teachersRes, classroomsRes, batchesRes, cellsRes, notifRes, slotsRes, leavesRes, changeLogsRes, waLogsRes, attendanceRes, topicLogsRes] = await Promise.all([
         supabase.from('teachers').select('id,name,subjects,wing,status,phone,created_at,updated_at,short_name,available_from,available_to,available_days,hours_per_day,teacher_type,classes_per_day,classes_per_week,unavailable_dates,availability_notes,salary_type,per_class_salary,per_day_salary,monthly_salary,paid_leaves_per_month').order('id'),
         supabase.from('classrooms').select('*').order('id'),
         supabase.from('batches').select('*').order('id'),
-        supabase.from('cells').select('*'),
+        fetchAllRows(() => supabase.from('cells').select('id,cell_key,day,time_slot,batch,subject,teacher,room')),
         supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50),
         supabase.from('time_slots').select('*').order('sort_order'),
         supabase.from('leave_requests').select('*').order('created_at', { ascending: false }).limit(100),
@@ -8367,6 +8424,14 @@ export default function App() {
         supabase.from('teacher_attendance').select('*').order('date', { ascending: false }).limit(2000),
         supabase.from('topic_logs').select('*').order('date', { ascending: false }).limit(2000),
       ]);
+
+      if (mySeq !== loadSeqRef.current) return; // naya load chal chuka hai — ye purana result ignore
+
+      // Koi bhi query fail ho to chupchap ignore nahi — console mein dikhao
+      const resNames = ['teachers', 'classrooms', 'batches', 'cells', 'notifications', 'time_slots', 'leave_requests', 'timetable_change_logs', 'whatsapp_notification_logs', 'teacher_attendance', 'topic_logs'];
+      [teachersRes, classroomsRes, batchesRes, cellsRes, notifRes, slotsRes, leavesRes, changeLogsRes, waLogsRes, attendanceRes, topicLogsRes].forEach((r, i) => {
+        if (r?.error) console.error(`[Load] ${resNames[i]} load failed:`, r.error);
+      });
 
       if (leavesRes && leavesRes.data) {
         setLeaveRequests(leavesRes.data);
@@ -8445,9 +8510,17 @@ export default function App() {
       setConnectionStatus('connected');
     } catch (err) {
       console.error('Failed to load data:', err);
-      setConnectionStatus('error');
+      if (mySeq === loadSeqRef.current) setConnectionStatus('error');
     }
     setLoading(false);
+  };
+
+  // Realtime: ek save se 3-4 events aate hain (cells + change log + notifications) —
+  // har ek par poora reload karne ke bajaye 400ms mein ek hi reload
+  const reloadTimerRef = useRef(null);
+  const scheduleReload = () => {
+    clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => loadAllData(), 400);
   };
 
   useEffect(() => {
@@ -8456,19 +8529,19 @@ export default function App() {
     // REALTIME SUBSCRIPTIONS — when anyone changes data, everyone sees it
     const channel = supabase
       .channel('dreamers-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'classrooms' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cells' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_slots' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'leave_requests' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'timetable_change_logs' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_notification_logs' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'teacher_attendance' }, () => loadAllData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'teachers' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'classrooms' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cells' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_slots' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leave_requests' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'timetable_change_logs' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_notification_logs' }, () => scheduleReload())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'teacher_attendance' }, () => scheduleReload())
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => { clearTimeout(reloadTimerRef.current); supabase.removeChannel(channel); };
   }, []);
 
   // ADD NOTIFICATION — writes to Supabase
@@ -8514,7 +8587,16 @@ export default function App() {
   };
 
   // SAVE INDIVIDUAL CELL — Day-aware. cellKeyShort = '08:00-NDA 1' (without day prefix)
-  // Builds full DB key as 'Mon-08:00-NDA 1' and saves
+  // Builds full DB key as 'Mon-08:00-NDA 1' and saves to the REAL timetable table `cells`.
+  // (timetable_change_logs sirf history hai — wo tabhi likha jata hai jab `cells` save confirm ho jaye.)
+  //
+  // Returns { ok: true } ya { ok: false, message }. Fail hone par optimistic change wapas (rollback) ho jata hai.
+  //
+  // Upsert ki jagah UPDATE → (0 rows to) INSERT kyun:
+  //   • upsert({ onConflict: 'cell_key' }) tabhi chalta hai jab DB mein cell_key par UNIQUE constraint ho —
+  //     warna har save "no unique or exclusion constraint" error deta hai.
+  //   • RLS UPDATE block kare to Supabase error NAHI deta, bas 0 rows update hoti hain — .select() se pakadte hain.
+  //   • Galti se duplicate rows (same cell_key) hon to UPDATE sabko ek saath sahi kar deta hai.
   const saveCellToDB = async (day, cellKeyShort, cellData) => {
     const fullCellKey = buildCellKey(day, cellKeyShort);
     const timeSlot = cellKeyShort.split('-')[0];
@@ -8523,42 +8605,89 @@ export default function App() {
     const changedBy = role === 'manager' ? 'Manager' : 'Director';
 
     // Optimistic update: update local state immediately for instant UI feedback
-    setCells(prev => {
+    const applyLocal = (data) => setCells(prev => {
       const next = { ...prev };
-      if (cellData === null || cellData === undefined) {
+      if (data === null || data === undefined) {
         delete next[fullCellKey];
       } else {
-        next[fullCellKey] = cellData;
+        next[fullCellKey] = data;
       }
       return next;
     });
-    if (!cellData) {
-      // DELETE cell
-      const { error } = await supabase.from('cells').delete().eq('cell_key', fullCellKey);
-      if (error) console.error('Cell delete failed:', error);
-      // Log REMOVED change
-      if (existingCell) {
-        await logTimetableChange({
-          cellKey: fullCellKey, day, timeSlot, batch,
-          action: 'removed',
-          old: existingCell,
-          new: null,
-          changedBy,
-        });
+    applyLocal(cellData);
+
+    const fail = (stage, error, fallbackMsg) => {
+      console.error(`[Timetable] ${stage} failed for ${fullCellKey}:`, error || fallbackMsg);
+      applyLocal(existingCell); // rollback — UI ko DB ke asli data par wapas lao
+      return { ok: false, message: error ? explainDbError(error) : fallbackMsg };
+    };
+
+    try {
+      if (!cellData) {
+        // DELETE cell
+        const { data: deleted, error } = await supabase.from('cells').delete().eq('cell_key', fullCellKey).select('id');
+        if (error) return fail('Cell delete', error);
+        if (existingCell && (!deleted || deleted.length === 0)) {
+          return fail('Cell delete', null, 'DB ne 0 rows delete ki — `cells` table par DELETE ki RLS policy missing hai. TIMETABLE_FIX.sql chalao.');
+        }
+        // Log REMOVED change (sirf successful delete ke baad)
+        if (existingCell) {
+          await logTimetableChange({
+            cellKey: fullCellKey, day, timeSlot, batch,
+            action: 'removed',
+            old: existingCell,
+            new: null,
+            changedBy,
+          });
+        }
+        return { ok: true };
       }
-    } else {
-      // UPSERT cell
-      const { error } = await supabase.from('cells').upsert({
-        cell_key: fullCellKey,
+
+      const row = {
         day: day,
         time_slot: timeSlot,
         batch: batch,
         subject: cellData.subj,
         teacher: cellData.tch,
         room: cellData.room,
-      }, { onConflict: 'cell_key' });
-      if (error) console.error('Cell save failed:', error);
-      // Log ASSIGNED or UPDATED change
+      };
+
+      // 1) UPDATE existing row(s) — .select() batata hai kitni rows sach mein update hui
+      const { data: updated, error: updErr } = await supabase
+        .from('cells')
+        .update(row)
+        .eq('cell_key', fullCellKey)
+        .select('id,cell_key,subject,teacher,room');
+      if (updErr) return fail('Cell update', updErr);
+
+      let saved = updated || [];
+      if (saved.length === 0) {
+        // 2) Koi row nahi mili → naya cell INSERT
+        const { data: inserted, error: insErr } = await supabase
+          .from('cells')
+          .insert([{ cell_key: fullCellKey, ...row }])
+          .select('id,cell_key,subject,teacher,room');
+        if (insErr) {
+          if (insErr.code === '23505') {
+            // Row DB mein hai (duplicate key) par UPDATE ne 0 rows chhui = RLS UPDATE block kar raha hai
+            return fail('Cell update', null, 'Ye period DB mein already hai par UPDATE block ho raha hai (0 rows updated). `cells` table par UPDATE ki RLS policy missing hai — TIMETABLE_FIX.sql chalao.');
+          }
+          return fail('Cell insert', insErr);
+        }
+        saved = inserted || [];
+        if (saved.length === 0) {
+          return fail('Cell insert', null, 'DB ne insert confirm nahi kiya (0 rows) — `cells` table par INSERT/SELECT ki RLS policy check karo. TIMETABLE_FIX.sql chalao.');
+        }
+      }
+
+      // 3) Verify — DB mein wahi values gayi jo bheji thi
+      const same = (a, b) => (a ?? null) === (b ?? null);
+      const mismatch = saved.find(r => !same(r.subject, row.subject) || !same(r.teacher, row.teacher) || !same(r.room, row.room));
+      if (mismatch) {
+        return fail('Cell verify', null, 'DB mein save hui values alag hain (koi trigger/default overwrite kar raha hai). Console dekho.');
+      }
+
+      // Log ASSIGNED or UPDATED change (sirf confirmed save ke baad)
       await logTimetableChange({
         cellKey: fullCellKey, day, timeSlot, batch,
         action: existingCell ? 'updated' : 'assigned',
@@ -8566,6 +8695,9 @@ export default function App() {
         new: cellData,
         changedBy,
       });
+      return { ok: true };
+    } catch (e) {
+      return fail('Cell save', { message: e?.message || String(e) });
     }
   };
 
@@ -8586,7 +8718,7 @@ export default function App() {
       alert(`${sourceDay} mein koi classes nahi hain — pehle source day setup karo.`);
       return { copied: 0, errors: 0 };
     }
-    let copied = 0, errors = 0;
+    let copied = 0, errors = 0, firstError = null;
     // For each target day:
     // 1. Delete existing cells for target day
     // 2. Insert copies of source cells with target day prefix
@@ -8596,7 +8728,7 @@ export default function App() {
         // DELETE all cells for target day
         const targetPrefix = `${targetDay}-`;
         const { error: delErr } = await supabase.from('cells').delete().like('cell_key', `${targetPrefix}%`);
-        if (delErr) { console.error('Delete failed for', targetDay, delErr); errors++; continue; }
+        if (delErr) { console.error('Delete failed for', targetDay, delErr); errors++; firstError = firstError || explainDbError(delErr); continue; }
         // INSERT copies with target day prefix
         const rowsToInsert = sourceCells.map(([fullKey, data]) => {
           const { shortKey } = parseCellKey(fullKey);
@@ -8614,16 +8746,17 @@ export default function App() {
         });
         if (rowsToInsert.length > 0) {
           const { error: insErr } = await supabase.from('cells').insert(rowsToInsert);
-          if (insErr) { console.error('Insert failed for', targetDay, insErr); errors++; continue; }
+          if (insErr) { console.error('Insert failed for', targetDay, insErr); errors++; firstError = firstError || explainDbError(insErr); continue; }
         }
         copied += rowsToInsert.length;
       } catch (e) {
         console.error('Copy day error:', e);
         errors++;
+        firstError = firstError || explainDbError(e);
       }
     }
     // Realtime will refresh cells state
-    return { copied, errors };
+    return { copied, errors, firstError };
   };
 
   // TEACHERS CRUD
@@ -8784,16 +8917,28 @@ export default function App() {
     if (error) { alert('Failed to update batch: ' + error.message); return; }
     // STEP 3: If name changed, CASCADE to cells (rebuild cell_key + batch column)
     if (oldName && oldName !== updates.name) {
-      const { data: oldCells } = await supabase.from('cells').select('*').eq('batch', oldName);
+      const { data: oldCells, error: oldCellsErr } = await supabase.from('cells').select('id,day,time_slot').eq('batch', oldName);
+      if (oldCellsErr) {
+        console.error('Failed to load batch cells for rename:', oldCellsErr);
+        alert(`Batch rename ho gaya par uski classes update nahi hui: ${explainDbError(oldCellsErr)}`);
+        return;
+      }
       if (oldCells && oldCells.length > 0) {
+        let failed = 0, firstErr = null;
         for (const cell of oldCells) {
           const newCellKey = `${cell.day || 'Mon'}-${cell.time_slot}-${updates.name}`;
-          await supabase.from('cells').update({
+          const { error: cErr } = await supabase.from('cells').update({
             cell_key: newCellKey,
             batch: updates.name,
           }).eq('id', cell.id);
+          if (cErr) { failed++; firstErr = firstErr || cErr; }
         }
-        console.log(`Cascaded ${oldCells.length} cells from "${oldName}" → "${updates.name}"`);
+        if (failed > 0) {
+          console.error(`Batch rename cascade: ${failed}/${oldCells.length} cells failed`, firstErr);
+          alert(`Batch rename: ${failed} classes update nahi hui — ${explainDbError(firstErr)}`);
+        } else {
+          console.log(`Cascaded ${oldCells.length} cells from "${oldName}" → "${updates.name}"`);
+        }
       }
     }
   };
