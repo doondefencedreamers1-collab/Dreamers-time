@@ -4211,11 +4211,11 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
 
       {/* DAILY VIEW — time x batches */}
       {viewMode === 'daily' && (
-        <div className="border border-stone-800 bg-stone-950/40 overflow-x-auto">
+        <div className="tt-freeze border border-stone-800 bg-stone-950/40">
           <table className="w-full text-xs min-w-[700px]">
             <thead>
               <tr className="border-b border-stone-800">
-                <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20">Time</th>
+                <th className="tt-time text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20">Time</th>
                 {batchList.map(b => <th key={b} className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-400 font-mono border-l border-stone-800">{b}<div className="text-[8px] text-stone-600 normal-case mt-0.5">{batchStrengthMap[b] || '—'} students</div></th>)}
               </tr>
             </thead>
@@ -4227,8 +4227,8 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
                 // BREAK ROW — render full-width amber strip
                 if (slot && slot.isBreak) {
                   return (
-                    <tr key={time} className="border-b border-amber-700/30 bg-amber-500/[0.04]">
-                      <td className="px-3 py-3 font-mono text-[11px] text-amber-400/80">
+                    <tr key={time} className="tt-break border-b border-amber-700/30 bg-amber-500/[0.04]">
+                      <td className="tt-time tt-time-break px-3 py-3 font-mono text-[11px] text-amber-400/80">
                         {time}
                         <div className="text-[8px] text-amber-500/60 mt-0.5">{slot.endTime}</div>
                       </td>
@@ -4244,7 +4244,7 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
                 }
                 return (
                 <tr key={time} className={`border-b border-stone-800/60 ${isCurrentRow ? 'bg-emerald-500/[0.03]' : ''}`}>
-                  <td className={`px-3 py-2 font-mono text-[11px] ${isCurrentRow ? 'text-emerald-300' : slotStatus === 'completed' ? 'text-stone-600' : 'text-stone-500'}`}>
+                  <td className={`tt-time ${isCurrentRow ? 'tt-time-live' : ''} px-3 py-2 font-mono text-[11px] ${isCurrentRow ? 'text-emerald-300' : slotStatus === 'completed' ? 'text-stone-600' : 'text-stone-500'}`}>
                     {time}
                     {slot && <div className="text-[8px] text-stone-600 mt-0.5">{slot.endTime}</div>}
                     {isCurrentRow && <div className="flex items-center gap-1 mt-0.5">
@@ -4300,18 +4300,18 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
       {viewMode === 'weekly' && (
         <>
           <div className="text-[10px] uppercase tracking-[0.2em] text-stone-500 font-mono">Showing full week for <span className="text-amber-300">{weeklyBatch}</span> · 26 May - 31 May 2026</div>
-          <div className="border border-stone-800 bg-stone-950/40 overflow-x-auto">
+          <div className="tt-freeze border border-stone-800 bg-stone-950/40">
             <table className="w-full text-xs min-w-[700px]">
               <thead>
                 <tr className="border-b border-stone-800">
-                  <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20">Time</th>
+                  <th className="tt-time text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20">Time</th>
                   {days.map(d => <th key={d} className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-400 font-mono border-l border-stone-800">{d}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {times.map(time => (
                   <tr key={time} className="border-b border-stone-800/60">
-                    <td className="px-3 py-2 font-mono text-[11px] text-stone-500">{time}</td>
+                    <td className="tt-time px-3 py-2 font-mono text-[11px] text-stone-500">{time}</td>
                     {days.map((d, dayIdx) => {
                       // Get cell from the day's actual data
                       const dayCells = cellsByDay[d] || {};
@@ -4361,18 +4361,18 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
         return (
           <>
             <div className="text-[10px] uppercase tracking-[0.2em] text-stone-500 font-mono">Teacher-wise schedule · {usedTeachers.length} teachers active today · empty cell = free slot</div>
-            <div className="border border-stone-800 bg-stone-950/40 overflow-x-auto">
+            <div className="tt-freeze border border-stone-800 bg-stone-950/40">
               <table className="w-full text-xs min-w-[900px]">
                 <thead>
                   <tr className="border-b border-stone-800">
-                    <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20 sticky left-0 bg-stone-950">Time</th>
+                    <th className="tt-time text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20">Time</th>
                     {usedTeachers.map(t => <th key={t} className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-400 font-mono border-l border-stone-800 min-w-[100px]">{t}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {times.map(time => (
                     <tr key={time} className="border-b border-stone-800/60">
-                      <td className="px-3 py-2 font-mono text-[11px] text-stone-500 sticky left-0 bg-stone-950">{time}</td>
+                      <td className="tt-time px-3 py-2 font-mono text-[11px] text-stone-500">{time}</td>
                       {usedTeachers.map(t => {
                         const cell = findByTeacher(time, t);
                         if (!cell) return (
@@ -4417,11 +4417,11 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
         return (
           <>
             <div className="text-[10px] uppercase tracking-[0.2em] text-stone-500 font-mono">Room-wise occupancy · {usedRooms.length} rooms in use · empty cell = room available</div>
-            <div className="border border-stone-800 bg-stone-950/40 overflow-x-auto">
+            <div className="tt-freeze border border-stone-800 bg-stone-950/40">
               <table className="w-full text-xs min-w-[800px]">
                 <thead>
                   <tr className="border-b border-stone-800">
-                    <th className="text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20 sticky left-0 bg-stone-950">Time</th>
+                    <th className="tt-time text-left px-3 py-3 text-[10px] uppercase tracking-wider text-stone-500 font-mono w-20">Time</th>
                     {usedRooms.map(r => (
                       <th key={r} className="text-left px-3 py-3 text-[10px] uppercase tracking-wider font-mono border-l border-stone-800 min-w-[110px]">
                         <div className="flex items-center gap-1 text-amber-300/80">
@@ -4435,7 +4435,7 @@ const TimetableView = ({ role = 'director', addNotification = () => {}, orphanCe
                 <tbody>
                   {times.map(time => (
                     <tr key={time} className="border-b border-stone-800/60">
-                      <td className="px-3 py-2 font-mono text-[11px] text-stone-500 sticky left-0 bg-stone-950">{time}</td>
+                      <td className="tt-time px-3 py-2 font-mono text-[11px] text-stone-500">{time}</td>
                       {usedRooms.map(r => {
                         const cell = findByRoom(time, r);
                         if (!cell) return (
